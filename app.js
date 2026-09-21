@@ -1,0 +1,590 @@
+/*
+ * app.js
+ * Wires together: chess.js (rules/PGN) + a Stockfish Worker (MultiPV eval)
+ * + classification.js (Book/Correct/Good/Brilliant/Mistake/Blunder) + the DOM.
+ *
+ * See README.md for why this needs to run from a local server (not
+ * double-clicked as a file://) and where to put the engine file.
+ */
+
+// ---------- DOM ----------
+const el = (id) => document.getElementById(id);
+const pgnInput = el("pgnInput");
+const analyzeBtn = el("analyzeBtn");
+const cancelBtn = el("cancelBtn");
+const resetBtn = el("resetBtn");
+const settingsBtn = el("settingsBtn");
+const settingsPanel = el("settingsPanel");
+const progressRow = el("progressRow");
+const progressFill = el("progressFill");
+const progressLabel = el("progressLabel");
+const engineStatus = el("engineStatus");
+const boardEl = el("board");
+const evalBarWhite = el("evalBarWhite");
+const evalBarLabel = el("evalBarLabel");
+const moveListEl = el("moveList");
+const statsBody = el("statsBody");
+const legendList = el("legendList");
+const turnIndicator = el("turnIndicator");
+const filesLabel = el("filesLabel");
+const ranksLabel = el("ranksLabel");
+
+const PIECE_GLYPHS = {
+  p: "\u265F", n: "\u265E", b: "\u265D", r: "\u265C", q: "\u265B", k: "\u265A",
+};
+
+// ---------- Engine wrapper ----------
+// Loaded from a local file (see README.md) so there are no cross-origin
+// worker/wasm issues. Adjust the path here if you name the file differently.
+const ENGINE_PATH = "engine/stockfish-18-lite-single.js";
+
+class EngineClient {
+  constructor() {
+    this.worker = null;
+    this.ready = false;
+  }
+
+  async init() {
+    return new Promise((resolve, reject) => {
+      try {
+        this.worker = new Worker(ENGINE_PATH);
+      } catch (e) {
+        reject(new Error("Could not create engine worker: " + e.message));
+        return;
+      }
+      const onMsg = (e) => {
+        const line = e.data;
+        if (typeof line === "string" && line.includes("uciok")) {
+          this.worker.removeEventListener("message", onMsg);
+          this.ready = true;
+          resolve();
+        }
+      };
+      this.worker.addEventListener("message", onMsg);
+      this.worker.onerror = (err) => reject(new Error("Engine worker error: " + err.message));
+      this.worker.postMessage("uci");
+    });
+  }
+
+  setOption(name, value) {
+    this.worker.postMessage(`setoption name ${name} value ${value}`);
+  }
+
+  /**
+   * Analyze one FEN, returning up to `multipv` candidate moves sorted
+   * best-first, each { moveUci, cp, mate }.
+   */
+  analyze(fen, depth, multipv) {
+    return new Promise((resolve) => {
+      const lines = new Map(); // multipv index -> {cp, mate, moveUci}
+      const onMsg = (e) => {
+        const text = e.data;
+        if (typeof text !== "string") return;
+
+        if (text.startsWith("info") && text.includes(" pv ")) {
+          const mpvMatch = text.match(/multipv (\d+)/);
+          const cpMatch = text.match(/score cp (-?\d+)/);
+          const mateMatch = text.match(/score mate (-?\d+)/);
+          const pvMatch = text.match(/ pv (.+)$/);
+          if (mpvMatch && pvMatch) {
+            const idx = parseInt(mpvMatch[1], 10);
+            const moveUci = pvMatch[1].trim().split(" ")[0];
+            const entry = { moveUci };
+            if (cpMatch) entry.cp = parseInt(cpMatch[1], 10);
+            if (mateMatch) entry.mate = parseInt(mateMatch[1], 10);
+            lines.set(idx, entry);
+          }
+        }
+
+        if (text.startsWith("bestmove")) {
+          this.worker.removeEventListener("message", onMsg);
+          const sorted = [...lines.entries()].sort((a, b) => a[0] - b[0]).map(x => x[1]);
+          resolve(sorted);
+        }
+      };
+      this.worker.addEventListener("message", onMsg);
+      this.setOption("MultiPV", multipv);
+      this.worker.postMessage(`position fen ${fen}`);
+      this.worker.postMessage(`go depth ${depth}`);
+    });
+  }
+
+  /**
+   * Get the exact evaluation of one specific move (used when the played
+   * move wasn't among the top MultiPV candidates already collected, so
+   * we don't have to guess its win% — see classification.js).
+   */
+  evaluateMove(fen, moveUci, depth) {
+    return new Promise((resolve) => {
+      let lastScore = null;
+      const onMsg = (e) => {
+        const text = e.data;
+        if (typeof text !== "string") return;
+        if (text.startsWith("info") && text.includes(" pv ")) {
+          const cpMatch = text.match(/score cp (-?\d+)/);
+          const mateMatch = text.match(/score mate (-?\d+)/);
+          if (cpMatch) lastScore = { cp: parseInt(cpMatch[1], 10) };
+          if (mateMatch) lastScore = { mate: parseInt(mateMatch[1], 10) };
+        }
+        if (text.startsWith("bestmove")) {
+          this.worker.removeEventListener("message", onMsg);
+          resolve(lastScore);
+        }
+      };
+      this.worker.addEventListener("message", onMsg);
+      // MultiPV 1 here: we only want this single move's own line, not a
+      // ranked list, so restrict the search to it directly.
+      this.setOption("MultiPV", 1);
+      this.worker.postMessage(`position fen ${fen}`);
+      this.worker.postMessage(`go depth ${depth} searchmoves ${moveUci}`);
+    });
+  }
+
+  stopAndTerminate() {
+    if (this.worker) {
+      try { this.worker.postMessage("stop"); } catch (_) {}
+      this.worker.terminate();
+      this.worker = null;
+      this.ready = false;
+    }
+  }
+}
+
+// ---------- Opening explorer (Book detection) ----------
+// Uses lichess's public Masters explorer. If the network call fails
+// (offline, blocked), we fall back to a simple "first few low-eval
+// plies" heuristic and say so in the engine status line.
+let explorerAvailable = true;
+
+async function isBookPosition(fen, minGames) {
+  if (!explorerAvailable) return null; // null = "unknown, use fallback"
+  try {
+    const url = `https://explorer.lichess.org/masters?fen=${encodeURIComponent(fen)}&topGames=0&moves=0`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("explorer HTTP " + res.status);
+    const data = await res.json();
+    const total = (data.white || 0) + (data.draws || 0) + (data.black || 0);
+    return total >= minGames;
+  } catch (e) {
+    explorerAvailable = false;
+    return null;
+  }
+}
+
+// ---------- State ----------
+let chess = new Chess();
+let plies = [];          // { fenBefore, moveUci, moveSan, color, moveNumber, toSquare, fromSquare }
+let classified = [];     // parallel array, one Classification result per ply
+let fenAtPly = [];       // fenAtPly[i] = fen AFTER ply i is played (fenAtPly[-1] = start)
+let currentPlyView = -1; // -1 = start position
+let engine = null;
+let cancelRequested = false;
+
+function readSettings() {
+  return {
+    depth: parseInt(el("depthInput").value, 10) || 18,
+    multipv: parseInt(el("multipvInput").value, 10) || 5,
+    mistake: parseInt(el("mistakeInput").value, 10) || 10,
+    blunder: parseInt(el("blunderInput").value, 10) || 20,
+    minBookGames: 50,
+  };
+}
+
+// ---------- PGN -> ply list ----------
+function buildPlyListFromPgn(pgn) {
+  const c = new Chess();
+  const ok = c.load_pgn(pgn, { sloppy: true });
+  if (!ok) throw new Error("Could not parse this PGN.");
+  const history = c.history({ verbose: true });
+
+  const replay = new Chess();
+  const list = [];
+  const fens = [];
+  history.forEach((m, i) => {
+    const fenBefore = replay.fen();
+    replay.move({ from: m.from, to: m.to, promotion: m.promotion });
+    const moveUci = m.from + m.to + (m.promotion || "");
+    list.push({
+      fenBefore,
+      moveUci,
+      moveSan: m.san,
+      color: m.color, // 'w' | 'b'
+      moveNumber: Math.floor(i / 2) + 1,
+      fromSquare: m.from,
+      toSquare: m.to,
+    });
+    fens.push(replay.fen());
+  });
+  return { plies: list, fens };
+}
+
+// ---------- Analysis pipeline ----------
+async function runAnalysis() {
+  const pgn = pgnInput.value.trim();
+  if (!pgn) { alert("Paste a PGN first."); return; }
+
+  let parsed;
+  try {
+    parsed = buildPlyListFromPgn(pgn);
+  } catch (e) {
+    alert(e.message);
+    return;
+  }
+  plies = parsed.plies;
+  fenAtPly = parsed.fens;
+  classified = new Array(plies.length).fill(null);
+  cancelRequested = false;
+
+  setBusy(true);
+  progressRow.hidden = false;
+  explorerAvailable = true;
+
+  const settings = readSettings();
+
+  try {
+    engineStatus.textContent = "Engine: loading...";
+    engineStatus.className = "engine-status";
+    engine = new EngineClient();
+    await engine.init();
+    engine.setOption("MultiPV", settings.multipv);
+    engineStatus.textContent = "Engine: ready";
+    engineStatus.className = "engine-status ready";
+  } catch (e) {
+    engineStatus.textContent = "Engine: failed to load (see README.md)";
+    engineStatus.className = "engine-status error";
+    alert(e.message + "\n\nSee README.md — you likely need to download the engine file into /engine and serve this folder over http, not open it directly as a file.");
+    setBusy(false);
+    return;
+  }
+
+  let stillInBook = true;
+
+  for (let i = 0; i < plies.length; i++) {
+    if (cancelRequested) break;
+
+    progressFill.style.width = `${Math.round((i / plies.length) * 100)}%`;
+    progressLabel.textContent = `Move ${i + 1} / ${plies.length}`;
+
+    const ply = plies[i];
+
+    let isBook = false;
+    if (stillInBook) {
+      const bookResult = await isBookPosition(ply.fenBefore, settings.minBookGames);
+      if (bookResult === true) {
+        isBook = true;
+      } else if (bookResult === false) {
+        stillInBook = false;
+      } else {
+        // explorer unreachable: fall back to "first 6 plies count as book"
+        isBook = i < 6;
+        if (i >= 6) stillInBook = false;
+      }
+    }
+
+    let multipv = [];
+    let playedScore = null;
+    if (!isBook) {
+      multipv = await engine.analyze(ply.fenBefore, settings.depth, settings.multipv);
+      const playedIsInMultipv = multipv.some(m => m.moveUci === ply.moveUci);
+      if (!playedIsInMultipv) {
+        // Query the played move's own evaluation directly instead of
+        // guessing it, then put MultiPV back for the next position.
+        playedScore = await engine.evaluateMove(ply.fenBefore, ply.moveUci, settings.depth);
+        engine.setOption("MultiPV", settings.multipv);
+      }
+    }
+
+    const result = Classification.classifyMove(
+      { multipv, playedMoveUci: ply.moveUci, isBook, moverColor: ply.color, playedScore },
+      settings
+    );
+
+    classified[i] = {
+      color: ply.color,
+      moveNumber: ply.moveNumber,
+      label: result.label,
+      dropPoints: result.dropPoints,
+      clusterSize: result.clusterSize,
+      bestWinPercent: result.bestWinPercent,
+      playedWinPercent: result.playedWinPercent,
+    };
+
+    renderMoveListRow(i);
+  }
+
+  if (!cancelRequested) {
+    Classification.upgradeBrilliants(classified);
+    renderMoveList();
+    renderStats();
+    progressFill.style.width = "100%";
+    progressLabel.textContent = `Done: ${plies.length} / ${plies.length}`;
+  }
+
+  engine.stopAndTerminate();
+  setBusy(false);
+  goToPly(plies.length - 1);
+}
+
+function setBusy(isBusy) {
+  analyzeBtn.disabled = isBusy;
+  cancelBtn.disabled = !isBusy;
+  pgnInput.disabled = isBusy;
+}
+
+function cancelAnalysis() {
+  cancelRequested = true;
+  if (engine) engine.stopAndTerminate();
+  setBusy(false);
+  engineStatus.textContent = "Engine: cancelled";
+}
+
+function resetAll() {
+  cancelAnalysis();
+  pgnInput.value = "";
+  plies = [];
+  classified = [];
+  fenAtPly = [];
+  currentPlyView = -1;
+  chess = new Chess();
+  progressRow.hidden = true;
+  progressFill.style.width = "0%";
+  moveListEl.innerHTML = "";
+  statsBody.innerHTML = "";
+  renderBoard(chess.fen());
+  updateEvalBar(null);
+  engineStatus.textContent = "Engine: not loaded";
+  engineStatus.className = "engine-status";
+}
+
+// ---------- Rendering: board ----------
+function renderBoard(fen, lastMove) {
+  boardEl.innerHTML = "";
+  const rows = fen.split(" ")[0].split("/");
+  for (let r = 0; r < 8; r++) {
+    let fileIdx = 0;
+    for (const ch of rows[r]) {
+      if (/\d/.test(ch)) {
+        for (let k = 0; k < parseInt(ch, 10); k++) {
+          placeSquare(r, fileIdx, null, lastMove);
+          fileIdx++;
+        }
+      } else {
+        placeSquare(r, fileIdx, ch, lastMove);
+        fileIdx++;
+      }
+    }
+  }
+}
+
+function placeSquare(row, col, pieceChar, lastMove) {
+  const square = document.createElement("div");
+  const isLight = (row + col) % 2 === 0;
+  square.className = `square ${isLight ? "light" : "dark"}`;
+
+  const fileLetter = "abcdefgh"[col];
+  const rankNumber = 8 - row;
+  const squareName = `${fileLetter}${rankNumber}`;
+  if (lastMove) {
+    if (squareName === lastMove.fromSquare) square.classList.add("last-from");
+    if (squareName === lastMove.toSquare) square.classList.add("last-to");
+  }
+
+  if (pieceChar) {
+    const isWhite = pieceChar === pieceChar.toUpperCase();
+    const glyph = PIECE_GLYPHS[pieceChar.toLowerCase()];
+    const span = document.createElement("span");
+    span.className = `piece ${isWhite ? "white-piece" : "black-piece"}`;
+    span.textContent = glyph;
+    square.appendChild(span);
+  }
+
+  if (lastMove && squareName === lastMove.toSquare && lastMove.badge) {
+    const badge = document.createElement("div");
+    badge.className = "badge-overlay";
+    badge.style.background = lastMove.badge.color;
+    badge.textContent = lastMove.badge.symbol;
+    square.appendChild(badge);
+  }
+
+  boardEl.appendChild(square);
+}
+
+function renderCoordinates() {
+  filesLabel.innerHTML = "";
+  "abcdefgh".split("").forEach(f => {
+    const s = document.createElement("span");
+    s.textContent = f;
+    filesLabel.appendChild(s);
+  });
+  ranksLabel.innerHTML = "";
+  for (let r = 1; r <= 8; r++) {
+    const s = document.createElement("span");
+    s.textContent = r;
+    ranksLabel.appendChild(s);
+  }
+}
+
+// ---------- Rendering: eval bar ----------
+function updateEvalBar(entry) {
+  if (!entry) {
+    evalBarWhite.style.height = "50%";
+    evalBarLabel.textContent = "0.0";
+    return;
+  }
+  // Convert the mover-perspective win% back to a White-perspective one.
+  const whiteWinPercent = entry.color === "w" ? entry.playedWinPercent : 100 - entry.playedWinPercent;
+  evalBarWhite.style.height = `${whiteWinPercent}%`;
+  evalBarLabel.textContent = `${Math.round(whiteWinPercent)}%`;
+}
+
+// ---------- Rendering: move list ----------
+function renderMoveList() {
+  moveListEl.innerHTML = "";
+  for (let i = 0; i < plies.length; i += 2) {
+    moveListEl.appendChild(buildMoveRow(i));
+  }
+}
+
+function renderMoveListRow(i) {
+  // incremental render used during analysis (keeps the list live)
+  if (i % 2 === 0) {
+    moveListEl.appendChild(buildMoveRow(i));
+  } else {
+    const rows = moveListEl.children;
+    const row = rows[rows.length - 1];
+    if (row) {
+      const blackCell = row.querySelector(".black-ply");
+      if (blackCell) fillPlyCell(blackCell, i);
+    }
+  }
+}
+
+function buildMoveRow(i) {
+  const li = document.createElement("li");
+  const num = document.createElement("span");
+  num.className = "num";
+  num.textContent = plies[i].moveNumber + ".";
+  li.appendChild(num);
+
+  const whiteCell = document.createElement("span");
+  whiteCell.className = "ply white-ply";
+  fillPlyCell(whiteCell, i);
+  li.appendChild(whiteCell);
+
+  const blackCell = document.createElement("span");
+  blackCell.className = "ply black-ply";
+  if (plies[i + 1]) fillPlyCell(blackCell, i + 1);
+  li.appendChild(blackCell);
+
+  return li;
+}
+
+function fillPlyCell(cellEl, index) {
+  const ply = plies[index];
+  const cls = classified[index];
+  cellEl.innerHTML = "";
+  if (cls) {
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    badge.style.background = cls.label.color;
+    badge.textContent = cls.label.symbol;
+    cellEl.appendChild(badge);
+  }
+  cellEl.appendChild(document.createTextNode(ply.moveSan));
+  cellEl.dataset.index = index;
+  cellEl.onclick = () => goToPly(index);
+}
+
+// ---------- Navigation ----------
+function goToPly(index) {
+  currentPlyView = index;
+  const fen = index < 0 ? new Chess().fen() : fenAtPly[index];
+  const ply = index < 0 ? null : plies[index];
+  const cls = index < 0 ? null : classified[index];
+
+  const lastMove = ply ? {
+    fromSquare: ply.fromSquare,
+    toSquare: ply.toSquare,
+    badge: cls ? cls.label : null,
+  } : null;
+
+  renderBoard(fen, lastMove);
+  updateEvalBar(cls);
+
+  document.querySelectorAll(".move-list .ply").forEach(elm => elm.classList.remove("active"));
+  if (index >= 0) {
+    const activeCell = document.querySelector(`.move-list .ply[data-index="${index}"]`);
+    if (activeCell) activeCell.classList.add("active");
+  }
+
+  const toMove = index < 0 ? "w" : (ply.color === "w" ? "b" : "w");
+  turnIndicator.textContent = toMove === "w" ? "White to move" : "Black to move";
+}
+
+// ---------- Rendering: stats ----------
+const STAT_ORDER = ["BRILLIANT", "GOOD", "CORRECT", "BOOK", "MISTAKE", "BLUNDER"];
+
+function renderStats() {
+  const counts = {};
+  STAT_ORDER.forEach(k => counts[k] = { w: 0, b: 0 });
+  classified.forEach(c => {
+    if (!c) return;
+    counts[c.label.key][c.color]++;
+  });
+
+  statsBody.innerHTML = "";
+  STAT_ORDER.forEach(key => {
+    const info = Classification.LABELS[key];
+    const tr = document.createElement("tr");
+
+    const tdWhite = document.createElement("td");
+    tdWhite.textContent = counts[key].w;
+
+    const tdLabel = document.createElement("td");
+    tdLabel.className = "label";
+    const dot = document.createElement("span");
+    dot.className = "dot";
+    dot.style.background = info.color;
+    tdLabel.appendChild(dot);
+    tdLabel.appendChild(document.createTextNode(`${info.symbol} ${info.name}`));
+
+    const tdBlack = document.createElement("td");
+    tdBlack.textContent = counts[key].b;
+
+    tr.appendChild(tdWhite);
+    tr.appendChild(tdLabel);
+    tr.appendChild(tdBlack);
+    statsBody.appendChild(tr);
+  });
+}
+
+function renderLegend() {
+  legendList.innerHTML = "";
+  STAT_ORDER.forEach(key => {
+    const info = Classification.LABELS[key];
+    const li = document.createElement("li");
+    const dot = document.createElement("span");
+    dot.className = "dot";
+    dot.style.background = info.color;
+    li.appendChild(dot);
+    li.appendChild(document.createTextNode(`${info.symbol}  ${info.name}`));
+    legendList.appendChild(li);
+  });
+}
+
+// ---------- Wire up events ----------
+analyzeBtn.addEventListener("click", runAnalysis);
+cancelBtn.addEventListener("click", cancelAnalysis);
+resetBtn.addEventListener("click", resetAll);
+settingsBtn.addEventListener("click", () => { settingsPanel.hidden = !settingsPanel.hidden; });
+
+el("navStart").addEventListener("click", () => goToPly(-1));
+el("navPrev").addEventListener("click", () => goToPly(Math.max(-1, currentPlyView - 1)));
+el("navNext").addEventListener("click", () => goToPly(Math.min(plies.length - 1, currentPlyView + 1)));
+el("navEnd").addEventListener("click", () => goToPly(plies.length - 1));
+
+// ---------- Init ----------
+renderCoordinates();
+renderLegend();
+renderBoard(new Chess().fen());
+updateEvalBar(null);

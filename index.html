@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Chess Review Prototype — Book / Correct / Good / Brilliant</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <h1>Chess Review <span class="subtitle">prototype</span></h1>
+  <div class="engine-status" id="engineStatus">Engine: not loaded</div>
+</header>
+
+<main class="layout">
+
+  <!-- LEFT: controls -->
+  <section class="controls">
+    <label for="pgnInput">Paste PGN</label>
+    <textarea id="pgnInput" rows="8" placeholder="1. e4 e5 2. Nf3 Nc6 3. Bb5 ..."></textarea>
+
+    <div class="button-row">
+      <button id="analyzeBtn" class="btn btn-primary">Analyze</button>
+      <button id="cancelBtn" class="btn" disabled>Cancel</button>
+      <button id="resetBtn" class="btn">Reset</button>
+      <button id="settingsBtn" class="btn btn-icon" title="Analysis settings" aria-label="Settings">⚙</button>
+    </div>
+
+    <div class="progress-row" id="progressRow" hidden>
+      <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+      <span id="progressLabel">Move 0 / 0</span>
+    </div>
+
+    <div id="settingsPanel" class="settings-panel" hidden>
+      <h3>Analysis settings</h3>
+      <label>
+        Depth
+        <input type="number" id="depthInput" min="8" max="30" value="18" />
+      </label>
+      <label>
+        MultiPV (candidate moves per position)
+        <input type="number" id="multipvInput" min="2" max="8" value="5" />
+      </label>
+      <label>
+        Mistake threshold (win% drop)
+        <input type="number" id="mistakeInput" min="1" max="50" value="10" />
+      </label>
+      <label>
+        Blunder threshold (win% drop)
+        <input type="number" id="blunderInput" min="1" max="50" value="20" />
+      </label>
+      <p class="settings-note">Higher depth and MultiPV give more reliable classifications but take longer per move.</p>
+    </div>
+
+    <h2 class="section-heading">Moves</h2>
+    <ol id="moveList" class="move-list"></ol>
+  </section>
+
+  <!-- CENTER: board -->
+  <section class="board-area">
+    <div class="board-row">
+      <div class="eval-bar-wrap">
+        <div class="eval-bar" id="evalBar">
+          <div class="eval-bar-white" id="evalBarWhite"></div>
+          <div class="eval-bar-label" id="evalBarLabel">0.0</div>
+        </div>
+      </div>
+
+      <div class="board-wrap">
+        <div class="board" id="board"></div>
+        <div class="files" id="filesLabel"></div>
+      </div>
+      <div class="ranks" id="ranksLabel"></div>
+    </div>
+
+    <div class="board-footer">
+      <span id="turnIndicator">White to move</span>
+      <span id="moveNav">
+        <button id="navStart" class="btn btn-small">⏮</button>
+        <button id="navPrev" class="btn btn-small">◀</button>
+        <button id="navNext" class="btn btn-small">▶</button>
+        <button id="navEnd" class="btn btn-small">⏭</button>
+      </span>
+    </div>
+  </section>
+
+  <!-- RIGHT: stats -->
+  <aside class="stats-area">
+    <h2 class="section-heading">Move stats</h2>
+    <table class="stats-table" id="statsTable">
+      <thead>
+        <tr><th>White</th><th>Classification</th><th>Black</th></tr>
+      </thead>
+      <tbody id="statsBody"></tbody>
+    </table>
+
+    <h2 class="section-heading">Legend</h2>
+    <ul class="legend" id="legendList"></ul>
+  </aside>
+
+</main>
+
+<footer class="footer-note">
+  Runs entirely in your browser using Stockfish and chess.js. See README.md for setup notes
+  (why this needs a local server, and where to get the engine file).
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.js"></script>
+<script src="classification.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
