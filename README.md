@@ -88,32 +88,68 @@ This mirrors the proposal, refined during discussion:
   just avoids losing what was already fine, so it's scored **Correct**
   instead. If the cluster has 3+ moves, or the gain check fails, it's
   Correct.
-- **Brilliant** — a second, retrospective pass over the finished game.
-  The first "Good" move opens a window of that player's own following
-  moves. The window length is configurable separately for the opening
-  (before move 15) and the rest of the game, both defaulting to 2 —
-  i.e. 2 full moves of your own, matching Carlsen's comment that his
-  own calculation ranges roughly 2 to 20 moves ahead depending on the
-  moment of the game (exactly what he meant by "moves" there — full
-  moves or plies — isn't something we could pin to a precise source,
-  so treat the defaults as a starting point to tune, not a strict
-  quote). If every one of the player's moves in that window keeps
-  landing in a scarce top cluster (≤2) without the advantage
-  collapsing, the origin move is upgraded to Brilliant. No
-  material-sacrifice detection is required — a Tal-style piece left
-  "hanging" while pushing a different plan shows up naturally through
-  this same scarcity/depth method.
+- **Brilliant** — now has **two independent, additive** paths, either
+  of which is enough:
+  1. *Scarcity chain* (the original idea): the first "Good" move opens
+     a window of that player's own following moves. The window length
+     is configurable separately for the opening (before move 15) and
+     the rest of the game, both defaulting to 2 — i.e. 2 full moves of
+     your own, matching Carlsen's comment that his own calculation
+     ranges roughly 2 to 20 moves ahead depending on the moment of the
+     game (exactly what he meant by "moves" there — full moves or
+     plies — isn't something we could pin to a precise source, so
+     treat the defaults as a starting point to tune, not a strict
+     quote). If every one of the player's moves in that window keeps
+     landing in a scarce top cluster (≤2) without the advantage
+     collapsing, the origin move is upgraded to Brilliant.
+  2. *Top-move chain* (added after testing against real games): reward
+     simply finding the engine's actual #1 move several times in a row
+     for the same player — even when the top cluster wasn't scarce at
+     each individual step — as long as doing so builds up a real
+     advantage over the span. Default: 2 consecutive own moves, 10+
+     win% points gained overall. Only the *first* move of a qualifying
+     run gets upgraded to Brilliant; the rest keep whatever label they
+     already had (usually Correct). This is meant to catch a "played a
+     clean forcing sequence" pattern that doesn't hinge on any single
+     do-or-die decision.
+
+  Both paths ignore Forced moves in between (they don't count toward
+  either chain, and don't break one either, since they involve no real
+  choice). No material-sacrifice detection is required for either path
+  — a Tal-style piece left "hanging" while pushing a different plan
+  shows up naturally through the scarcity-chain method.
+- **Forced** — when a position has exactly one legal move (e.g. the
+  only way out of check), it's labeled Forced and skipped entirely:
+  no engine analysis is run on it, and it can never be Good or start
+  or extend either kind of Brilliant chain, since there was no real
+  decision behind it.
 - **Mistake / Blunder** — the classic win%-drop-from-best check, using
   the two thresholds set in the settings panel (defaults: 10 and 20
   points).
 
-All five thresholds (Mistake drop, Blunder drop, Good's minimum gain,
-and the two Brilliant chain lengths) are exposed in the gear-icon
-settings panel specifically so they're easy to retune while testing
-against real games — nothing about their default values is meant to
-be final.
+All thresholds (Mistake drop, Blunder drop, Good's minimum gain, the
+two scarcity-chain lengths, and the two top-move-chain settings) are
+exposed in the gear-icon settings panel specifically so they're easy
+to retune while testing against real games — nothing about their
+default values is meant to be final.
 
-## 4. Known limitations of this prototype
+## 4. Exporting the analyzed game
+
+The "Export annotated PGN" button (enabled once an analysis finishes)
+downloads the game with every move tagged as a standard PGN comment,
+e.g.:
+
+```
+1. e4 {📖 Book} e5 {📖 Book} 2. Nf3 {! Good} ...
+```
+
+PGN comments in `{ }` are part of the format and are simply ignored by
+any PGN reader that doesn't care about them, so this file re-imports
+cleanly anywhere (including back into this same tool) — useful for
+diffing how the algorithm's output changes as you retune the settings
+above, or for pasting into the GitHub issue as a worked example.
+
+## 5. Known limitations of this prototype
 
 These are simplifications made to keep a first version buildable in a
 reasonable amount of code — worth flagging in the GitHub issue rather

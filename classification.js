@@ -31,6 +31,7 @@ const Classification = (() => {
 
   const LABELS = {
     BOOK:      { key: "BOOK",      symbol: "\u{1F4D6}", name: "Book",      color: "#88A17F" },
+    FORCED:    { key: "FORCED",    symbol: "\u2192",     name: "Forced",    color: "#EAC566" },
     CORRECT:   { key: "CORRECT",   symbol: "\u2713",     name: "Correct",   color: "#81C45D" },
     GOOD:      { key: "GOOD",      symbol: "!",          name: "Good",      color: "#4CA2E3" },
     BRILLIANT: { key: "BRILLIANT", symbol: "!!",         name: "Brilliant", color: "#8A6CEF" },
@@ -90,9 +91,14 @@ const Classification = (() => {
    * Classify a single move.
    *
    * @param {Object} position
-   *   { multipv: [{cp|mate, moveUci}], playedMoveUci, isBook, moverColor,
-   *     playedScore?, baselineWinPercent? }
+   *   { multipv: [{cp|mate, moveUci}], playedMoveUci, isBook, isForced,
+   *     moverColor, playedScore?, baselineWinPercent? }
    *   multipv is already sorted best-first, from the mover's perspective.
+   *   isForced: true when this was the only legal move on the board
+   *   (e.g. a king move that's the only way out of check). Forced moves
+   *   short-circuit straight to FORCED and are never engine-analyzed,
+   *   never Good, and never eligible to start or extend a Brilliant
+   *   chain - there was no decision to reward or penalize.
    *   playedScore ({cp|mate}) is optional: pass it whenever the played
    *   move's own evaluation was actually queried from the engine (e.g.
    *   via "go searchmoves") instead of being guessed, which is the
@@ -104,14 +110,17 @@ const Classification = (() => {
    *   just a return to a position that was already fine. Pass 50 (or
    *   omit) when there's no earlier move of theirs to compare against.
    * @param {Object} thresholds { mistake, blunder, gapPoints, goodGain }
-   * @returns {Object} { label, dropPoints, clusterSize, gain, bestWinPercent, playedWinPercent }
+   * @returns {Object} { label, dropPoints, clusterSize, gain, isTopMove, bestWinPercent, playedWinPercent }
    */
   function classifyMove(position, thresholds) {
     const { mistake, blunder, gapPoints } = thresholds;
     const goodGain = thresholds.goodGain ?? 8;
 
+    if (position.isForced) {
+      return { label: LABELS.FORCED, dropPoints: 0, clusterSize: null, isTopMove: false };
+    }
     if (position.isBook) {
-      return { label: LABELS.BOOK, dropPoints: 0, clusterSize: null };
+      return { label: LABELS.BOOK, dropPoints: 0, clusterSize: null, isTopMove: false };
     }
 
     const winPercents = position.multipv.map(m => winPercentFromScore(m));
@@ -130,14 +139,15 @@ const Classification = (() => {
       // relying on this branch (see app.js: evaluateMove()).
       playedWinPercent = winPercents[winPercents.length - 1] - Math.max(gapPoints * 2, blunder);
     }
+    const isTopMove = playedIndex === 0;
 
     const dropPoints = bestWinPercent - playedWinPercent;
 
     if (dropPoints >= blunder) {
-      return { label: LABELS.BLUNDER, dropPoints, clusterSize: null, bestWinPercent, playedWinPercent };
+      return { label: LABELS.BLUNDER, dropPoints, clusterSize: null, isTopMove, bestWinPercent, playedWinPercent };
     }
     if (dropPoints >= mistake) {
-      return { label: LABELS.MISTAKE, dropPoints, clusterSize: null, bestWinPercent, playedWinPercent };
+      return { label: LABELS.MISTAKE, dropPoints, clusterSize: null, isTopMove, bestWinPercent, playedWinPercent };
     }
 
     const clusterSize = topClusterSize(winPercents, gapPoints);
@@ -150,7 +160,7 @@ const Classification = (() => {
     // same as when there were plenty of equally-fine options: nothing
     // was "converted" either way.
     const label = (clusterSize <= 2 && gain > goodGain) ? LABELS.GOOD : LABELS.CORRECT;
-    return { label, dropPoints, clusterSize, gain, bestWinPercent, playedWinPercent };
+    return { label, dropPoints, clusterSize, gain, isTopMove, bestWinPercent, playedWinPercent };
   }
 
   /**
@@ -171,7 +181,9 @@ const Classification = (() => {
    * Second pass over an already-classified game: upgrade the first
    * "Good" move of a scarcity chain to "Brilliant" if the same player's
    * following moves (within the configured window) keep landing in a
-   * scarce top cluster (<=2) without the advantage collapsing.
+   * scarce top cluster (<=2) without the advantage collapsing. Forced
+   * moves in between are skipped (not counted, not required to hold
+   * the advantage) since they weren't a real decision either way.
    *
    * @param {Array} classifiedMoves  in game order, each item:
    *   { color: 'w'|'b', moveNumber, label, clusterSize, bestWinPercent, playedWinPercent }
@@ -186,13 +198,15 @@ const Classification = (() => {
       const window = brilliantWindow(origin.moveNumber, windowSettings.early, windowSettings.late);
       const sameColorFollowing = [];
       for (let j = i + 1; j < classifiedMoves.length && sameColorFollowing.length < window; j++) {
-        if (classifiedMoves[j].color === origin.color) sameColorFollowing.push(classifiedMoves[j]);
+        if (classifiedMoves[j].color === origin.color && classifiedMoves[j].label.key !== "FORCED") {
+          sameColorFollowing.push(classifiedMoves[j]);
+        }
       }
 
       if (sameColorFollowing.length === 0) continue;
 
       const advantageHeld = sameColorFollowing.every(m =>
-        (m.label.key === "GOOD" || m.label.key === "CORRECT") &&
+        (m.label.key === "GOOD" || m.label.key === "CORRECT" || m.label.key === "BRILLIANT") &&
         m.clusterSize !== null && m.clusterSize <= 2 &&
         m.playedWinPercent >= origin.playedWinPercent - 3 // small tolerance for engine noise
       );
@@ -204,7 +218,69 @@ const Classification = (() => {
     return classifiedMoves;
   }
 
-  return { LABELS, winPercentFromScore, winPercentFromCp, median, topClusterSize, classifyMove, brilliantWindow, upgradeBrilliants };
+  /**
+   * Alternative, additive path to Brilliant: instead of requiring
+   * scarce alternatives, this rewards simply finding the engine's own
+   * #1 move several times in a row for the same player, when doing so
+   * builds up a real gain overall. This is meant to catch a "played a
+   * clean forcing sequence" pattern that doesn't necessarily involve
+   * any single do-or-die decision - more of a sustained-accuracy combo
+   * than a single spotted shot. Only the first move of a qualifying
+   * run is upgraded; the rest keep whatever label they already had
+   * (often Correct, since picking the objective best move among many
+   * similarly-good ones doesn't by itself imply scarcity).
+   *
+   * Forced and Book moves are excluded from the run entirely (neither
+   * count toward the streak nor break it) since they involve no real
+   * choice either way.
+   *
+   * @param {Array} classifiedMoves  in game order (same shape as above)
+   * @param {Object} options { chainLength = 2, minGain = 10 }
+   */
+  function markTopMoveChains(classifiedMoves, options = {}) {
+    const chainLength = options.chainLength ?? 2;
+    const minGain = options.minGain ?? 10;
+
+    ["w", "b"].forEach(color => {
+      const ownIndices = [];
+      classifiedMoves.forEach((m, i) => {
+        if (m.color === color && m.label.key !== "FORCED" && m.label.key !== "BOOK") {
+          ownIndices.push(i);
+        }
+      });
+
+      let streakStart = null;
+      let streakLen = 0;
+
+      for (let k = 0; k < ownIndices.length; k++) {
+        const idx = ownIndices[k];
+        const move = classifiedMoves[idx];
+
+        if (move.isTopMove) {
+          if (streakLen === 0) streakStart = k;
+          streakLen++;
+        } else {
+          streakLen = 0;
+          streakStart = null;
+          continue;
+        }
+
+        if (streakLen >= chainLength) {
+          const startIdx = ownIndices[streakStart];
+          const prevOwnIdx = streakStart > 0 ? ownIndices[streakStart - 1] : null;
+          const baseline = prevOwnIdx !== null ? classifiedMoves[prevOwnIdx].playedWinPercent : 50;
+          const gain = move.playedWinPercent - baseline;
+          if (gain >= minGain) {
+            classifiedMoves[startIdx].label = LABELS.BRILLIANT;
+          }
+        }
+      }
+    });
+
+    return classifiedMoves;
+  }
+
+  return { LABELS, winPercentFromScore, winPercentFromCp, median, topClusterSize, classifyMove, brilliantWindow, upgradeBrilliants, markTopMoveChains };
 })();
 
 // Allow this file to be required from Node for testing, while staying a

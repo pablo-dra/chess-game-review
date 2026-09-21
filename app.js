@@ -178,6 +178,7 @@ let chess = new Chess();
 let plies = [];          // { fenBefore, moveUci, moveSan, color, moveNumber, toSquare, fromSquare }
 let classified = [];     // parallel array, one Classification result per ply
 let fenAtPly = [];       // fenAtPly[i] = fen AFTER ply i is played (fenAtPly[-1] = start)
+let gameHeaders = {};    // PGN header tags from the loaded game, for export
 let currentPlyView = -1; // -1 = start position
 let engine = null;
 let cancelRequested = false;
@@ -191,6 +192,8 @@ function readSettings() {
     goodGain: parseInt(el("goodGainInput").value, 10) || 8,
     brilliantEarly: parseInt(el("brilliantEarlyInput").value, 10) || 2,
     brilliantLate: parseInt(el("brilliantLateInput").value, 10) || 2,
+    topChainLength: parseInt(el("topChainLengthInput").value, 10) || 2,
+    topChainGain: parseInt(el("topChainGainInput").value, 10) || 10,
     minBookGames: 50,
   };
 }
@@ -201,6 +204,7 @@ function buildPlyListFromPgn(pgn) {
   const ok = c.load_pgn(pgn, { sloppy: true });
   if (!ok) throw new Error("Could not parse this PGN.");
   const history = c.history({ verbose: true });
+  const headers = c.header(); // {Event, White, Black, Result, ...} - whatever was present
 
   const replay = new Chess();
   const list = [];
@@ -220,7 +224,7 @@ function buildPlyListFromPgn(pgn) {
     });
     fens.push(replay.fen());
   });
-  return { plies: list, fens };
+  return { plies: list, fens, headers };
 }
 
 // ---------- Analysis pipeline ----------
@@ -237,6 +241,7 @@ async function runAnalysis() {
   }
   plies = parsed.plies;
   fenAtPly = parsed.fens;
+  gameHeaders = parsed.headers;
   classified = new Array(plies.length).fill(null);
   cancelRequested = false;
 
@@ -272,8 +277,13 @@ async function runAnalysis() {
 
     const ply = plies[i];
 
+    // A position with exactly one legal move (e.g. the only way out of
+    // check) involves no real decision, so it's never Book, never
+    // engine-analyzed, and never eligible for Good/Brilliant.
+    const isForced = new Chess(ply.fenBefore).moves().length === 1;
+
     let isBook = false;
-    if (stillInBook) {
+    if (!isForced && stillInBook) {
       const bookResult = await isBookPosition(ply.fenBefore, settings.minBookGames);
       if (bookResult === true) {
         isBook = true;
@@ -288,7 +298,7 @@ async function runAnalysis() {
 
     let multipv = [];
     let playedScore = null;
-    if (!isBook) {
+    if (!isForced && !isBook) {
       multipv = await engine.analyze(ply.fenBefore, settings.depth, settings.multipv);
       const playedIsInMultipv = multipv.some(m => m.moveUci === ply.moveUci);
       if (!playedIsInMultipv) {
@@ -310,7 +320,7 @@ async function runAnalysis() {
       : 50;
 
     const result = Classification.classifyMove(
-      { multipv, playedMoveUci: ply.moveUci, isBook, moverColor: ply.color, playedScore, baselineWinPercent },
+      { multipv, playedMoveUci: ply.moveUci, isBook, isForced, moverColor: ply.color, playedScore, baselineWinPercent },
       settings
     );
 
@@ -321,11 +331,12 @@ async function runAnalysis() {
       dropPoints: result.dropPoints,
       clusterSize: result.clusterSize,
       gain: result.gain,
+      isTopMove: result.isTopMove,
       bestWinPercent: result.bestWinPercent,
       playedWinPercent: result.playedWinPercent,
       // Kept for the "candidates considered here" panel; null for book
-      // moves since we didn't run the engine on them.
-      candidates: isBook ? null : multipv.map(m => ({
+      // and forced moves since we didn't run the engine on them.
+      candidates: (isBook || isForced) ? null : multipv.map(m => ({
         moveUci: m.moveUci,
         winPercent: Classification.winPercentFromScore(m),
       })),
@@ -336,10 +347,12 @@ async function runAnalysis() {
 
   if (!cancelRequested) {
     Classification.upgradeBrilliants(classified, { early: settings.brilliantEarly, late: settings.brilliantLate });
+    Classification.markTopMoveChains(classified, { chainLength: settings.topChainLength, minGain: settings.topChainGain });
     renderMoveList();
     renderStats();
     progressFill.style.width = "100%";
     progressLabel.textContent = `Done: ${plies.length} / ${plies.length}`;
+    el("exportPgnBtn").disabled = false;
   }
 
   engine.stopAndTerminate();
@@ -366,6 +379,7 @@ function resetAll() {
   plies = [];
   classified = [];
   fenAtPly = [];
+  gameHeaders = {};
   currentPlyView = -1;
   chess = new Chess();
   progressRow.hidden = true;
@@ -375,6 +389,7 @@ function resetAll() {
   renderBoard(chess.fen());
   updateEvalBar(null);
   renderCandidates(-1);
+  el("exportPgnBtn").disabled = true;
   engineStatus.textContent = "Engine: not loaded";
   engineStatus.className = "engine-status";
 }
@@ -575,7 +590,9 @@ function renderCandidates(index) {
   if (!cls || !cls.candidates) {
     const li = document.createElement("li");
     li.className = "candidate-note";
-    li.textContent = cls && cls.label.key === "BOOK" ? "Book move — not engine-analyzed." : "No data.";
+    if (cls && cls.label.key === "BOOK") li.textContent = "Book move — not engine-analyzed.";
+    else if (cls && cls.label.key === "FORCED") li.textContent = "Forced move — only one legal move on the board.";
+    else li.textContent = "No data.";
     candidatesList.appendChild(li);
     return;
   }
@@ -597,7 +614,7 @@ function renderCandidates(index) {
 }
 
 // ---------- Rendering: stats ----------
-const STAT_ORDER = ["BRILLIANT", "GOOD", "CORRECT", "BOOK", "MISTAKE", "BLUNDER"];
+const STAT_ORDER = ["BRILLIANT", "GOOD", "CORRECT", "BOOK", "FORCED", "MISTAKE", "BLUNDER"];
 
 function renderStats() {
   const counts = {};
@@ -647,11 +664,56 @@ function renderLegend() {
   });
 }
 
+// ---------- Export ----------
+// Every annotation is wrapped in a standard PGN comment ({ ... }), which
+// any compliant PGN parser simply ignores if it doesn't care about it -
+// so the exported file stays fully re-importable elsewhere (or back into
+// this same tool) while still carrying the classification for reference.
+function buildAnnotatedPgn() {
+  const lines = [];
+  const headers = { ...gameHeaders };
+  if (!headers.Event) headers.Event = "?";
+  Object.entries(headers).forEach(([k, v]) => lines.push(`[${k} "${v}"]`));
+  lines.push("");
+
+  let movetext = "";
+  plies.forEach((ply, i) => {
+    const cls = classified[i];
+    const tag = cls ? ` {${cls.label.symbol} ${cls.label.name}}` : "";
+    if (ply.color === "w") {
+      movetext += `${ply.moveNumber}. ${ply.moveSan}${tag} `;
+    } else {
+      movetext += `${ply.moveSan}${tag} `;
+    }
+  });
+  movetext += headers.Result || "*";
+  lines.push(movetext.trim());
+  return lines.join("\n");
+}
+
+function exportAnnotatedPgn() {
+  if (plies.length === 0 || classified.some(c => c === null)) {
+    alert("Run an analysis first.");
+    return;
+  }
+  const pgnText = buildAnnotatedPgn();
+  const blob = new Blob([pgnText], { type: "application/x-chess-pgn" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "analyzed-game.pgn";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 // ---------- Wire up events ----------
 analyzeBtn.addEventListener("click", runAnalysis);
 cancelBtn.addEventListener("click", cancelAnalysis);
 resetBtn.addEventListener("click", resetAll);
 settingsBtn.addEventListener("click", () => { settingsPanel.hidden = !settingsPanel.hidden; });
+el("exportPgnBtn").addEventListener("click", exportAnnotatedPgn);
 
 el("navStart").addEventListener("click", () => goToPly(-1));
 el("navPrev").addEventListener("click", () => goToPly(Math.max(-1, currentPlyView - 1)));
