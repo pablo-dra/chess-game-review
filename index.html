@@ -50,7 +50,19 @@
         Blunder threshold (win% drop)
         <input type="number" id="blunderInput" min="1" max="50" value="20" />
       </label>
-      <p class="settings-note">Higher depth and MultiPV give more reliable classifications but take longer per move.</p>
+      <label>
+        Good move min. gain (win% over your own previous position)
+        <input type="number" id="goodGainInput" min="1" max="50" value="8" />
+      </label>
+      <label>
+        Brilliant chain length — early game (your own moves, before move 15)
+        <input type="number" id="brilliantEarlyInput" min="1" max="15" value="2" />
+      </label>
+      <label>
+        Brilliant chain length — endgame (your own moves, move 15+)
+        <input type="number" id="brilliantLateInput" min="1" max="15" value="2" />
+      </label>
+      <p class="settings-note">Higher depth and MultiPV give more reliable classifications but take longer per move. The "min. gain" threshold is what keeps a forced-but-obvious retreat (e.g. saving a hanging piece) from being scored as a Good move: it must actually improve on where you already stood, not just be the only sane option.</p>
     </div>
 
     <h2 class="section-heading">Moves</h2>
@@ -83,6 +95,11 @@
         <button id="navEnd" class="btn btn-small">⏭</button>
       </span>
     </div>
+
+    <div class="candidates-panel">
+      <h2 class="section-heading" id="candidatesTitle">Candidate moves here</h2>
+      <ul id="candidatesList" class="candidates-list"></ul>
+    </div>
   </section>
 
   <!-- RIGHT: stats -->
@@ -102,8 +119,10 @@
 </main>
 
 <footer class="footer-note">
-  Runs entirely in your browser using Stockfish and chess.js. See README.md for setup notes
-  (why this needs a local server, and where to get the engine file).
+  Runs entirely in your browser using Stockfish and chess.js. Use the ◀ ▶ buttons or your keyboard's
+  left/right arrow keys to step through the game. See README.md for setup notes
+  (why this needs a local server, and where to get the engine file) and for why manual
+  drag-and-drop play wasn't included in this prototype.
 </footer>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.js"></script>

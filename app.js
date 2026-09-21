@@ -28,6 +28,8 @@ const legendList = el("legendList");
 const turnIndicator = el("turnIndicator");
 const filesLabel = el("filesLabel");
 const ranksLabel = el("ranksLabel");
+const candidatesList = el("candidatesList");
+const candidatesTitle = el("candidatesTitle");
 
 const PIECE_GLYPHS = {
   p: "\u265F", n: "\u265E", b: "\u265D", r: "\u265C", q: "\u265B", k: "\u265A",
@@ -186,6 +188,9 @@ function readSettings() {
     multipv: parseInt(el("multipvInput").value, 10) || 5,
     mistake: parseInt(el("mistakeInput").value, 10) || 10,
     blunder: parseInt(el("blunderInput").value, 10) || 20,
+    goodGain: parseInt(el("goodGainInput").value, 10) || 8,
+    brilliantEarly: parseInt(el("brilliantEarlyInput").value, 10) || 2,
+    brilliantLate: parseInt(el("brilliantLateInput").value, 10) || 2,
     minBookGames: 50,
   };
 }
@@ -294,8 +299,18 @@ async function runAnalysis() {
       }
     }
 
+    // This player's own win% right after their previous move (2 plies
+    // back), used so a "Good" move must be a genuine gain over where
+    // they already stood, not just the least-bad option available now.
+    // Defaults to a neutral 50 at the very start of the game or right
+    // after leaving book (book positions are ~equal by definition).
+    const prevOwn = classified[i - 2];
+    const baselineWinPercent = (prevOwn && prevOwn.playedWinPercent !== undefined)
+      ? prevOwn.playedWinPercent
+      : 50;
+
     const result = Classification.classifyMove(
-      { multipv, playedMoveUci: ply.moveUci, isBook, moverColor: ply.color, playedScore },
+      { multipv, playedMoveUci: ply.moveUci, isBook, moverColor: ply.color, playedScore, baselineWinPercent },
       settings
     );
 
@@ -305,15 +320,22 @@ async function runAnalysis() {
       label: result.label,
       dropPoints: result.dropPoints,
       clusterSize: result.clusterSize,
+      gain: result.gain,
       bestWinPercent: result.bestWinPercent,
       playedWinPercent: result.playedWinPercent,
+      // Kept for the "candidates considered here" panel; null for book
+      // moves since we didn't run the engine on them.
+      candidates: isBook ? null : multipv.map(m => ({
+        moveUci: m.moveUci,
+        winPercent: Classification.winPercentFromScore(m),
+      })),
     };
 
     renderMoveListRow(i);
   }
 
   if (!cancelRequested) {
-    Classification.upgradeBrilliants(classified);
+    Classification.upgradeBrilliants(classified, { early: settings.brilliantEarly, late: settings.brilliantLate });
     renderMoveList();
     renderStats();
     progressFill.style.width = "100%";
@@ -352,6 +374,7 @@ function resetAll() {
   statsBody.innerHTML = "";
   renderBoard(chess.fen());
   updateEvalBar(null);
+  renderCandidates(-1);
   engineStatus.textContent = "Engine: not loaded";
   engineStatus.className = "engine-status";
 }
@@ -510,6 +533,7 @@ function goToPly(index) {
 
   renderBoard(fen, lastMove);
   updateEvalBar(cls);
+  renderCandidates(index);
 
   document.querySelectorAll(".move-list .ply").forEach(elm => elm.classList.remove("active"));
   if (index >= 0) {
@@ -519,6 +543,57 @@ function goToPly(index) {
 
   const toMove = index < 0 ? "w" : (ply.color === "w" ? "b" : "w");
   turnIndicator.textContent = toMove === "w" ? "White to move" : "Black to move";
+}
+
+// Converts a UCI move (e.g. "e2e4", "e7e8q") into SAN (e.g. "e4",
+// "e8=Q") for display, using the FEN the move was played from.
+function uciToSan(fen, uci) {
+  try {
+    const c = new Chess(fen);
+    const from = uci.slice(0, 2), to = uci.slice(2, 4);
+    const promotion = uci.length > 4 ? uci.slice(4, 5) : undefined;
+    const move = c.move({ from, to, promotion });
+    return move ? move.san : uci;
+  } catch (_) {
+    return uci;
+  }
+}
+
+// Shows the candidate moves the engine considered at the position
+// BEFORE the currently-viewed ply, so it's clear why a move was scored
+// the way it was (e.g. "only these two moves kept an advantage here").
+function renderCandidates(index) {
+  candidatesList.innerHTML = "";
+  if (index < 0 || !plies[index]) {
+    candidatesTitle.textContent = "Candidate moves here";
+    return;
+  }
+  const ply = plies[index];
+  const cls = classified[index];
+  candidatesTitle.textContent = `Candidates before ${ply.moveNumber}${ply.color === "w" ? "." : "..."} ${ply.moveSan}`;
+
+  if (!cls || !cls.candidates) {
+    const li = document.createElement("li");
+    li.className = "candidate-note";
+    li.textContent = cls && cls.label.key === "BOOK" ? "Book move — not engine-analyzed." : "No data.";
+    candidatesList.appendChild(li);
+    return;
+  }
+
+  cls.candidates.forEach(cand => {
+    const li = document.createElement("li");
+    li.className = "candidate-row";
+    if (cand.moveUci === ply.moveUci) li.classList.add("played");
+    const san = document.createElement("span");
+    san.className = "candidate-san";
+    san.textContent = uciToSan(ply.fenBefore, cand.moveUci);
+    const pct = document.createElement("span");
+    pct.className = "candidate-pct";
+    pct.textContent = `${cand.winPercent.toFixed(1)}%`;
+    li.appendChild(san);
+    li.appendChild(pct);
+    candidatesList.appendChild(li);
+  });
 }
 
 // ---------- Rendering: stats ----------
@@ -583,8 +658,23 @@ el("navPrev").addEventListener("click", () => goToPly(Math.max(-1, currentPlyVie
 el("navNext").addEventListener("click", () => goToPly(Math.min(plies.length - 1, currentPlyView + 1)));
 el("navEnd").addEventListener("click", () => goToPly(plies.length - 1));
 
+// Left/right arrow keys step through the game, except while the user is
+// actually typing (PGN box or a settings number field).
+document.addEventListener("keydown", (e) => {
+  const tag = document.activeElement.tagName;
+  if (tag === "TEXTAREA" || tag === "INPUT") return;
+  if (e.key === "ArrowLeft") {
+    e.preventDefault();
+    goToPly(Math.max(-1, currentPlyView - 1));
+  } else if (e.key === "ArrowRight") {
+    e.preventDefault();
+    goToPly(Math.min(plies.length - 1, currentPlyView + 1));
+  }
+});
+
 // ---------- Init ----------
 renderCoordinates();
 renderLegend();
 renderBoard(new Chess().fen());
 updateEvalBar(null);
+renderCandidates(-1);

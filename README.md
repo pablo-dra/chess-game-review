@@ -6,9 +6,6 @@ following the classification proposal discussed for the Lichess feature
 request. It's meant as a proof of concept to attach to the GitHub
 issue, not a production tool.
 
-Use the following command on the root folder
-npx http-server
-
 ## 1. Setup (one-time)
 
 You need two things that aren't bundled in this folder, for licensing
@@ -80,25 +77,41 @@ This mirrors the proposal, refined during discussion:
   candidate's centipawn score is converted to a win% using the same
   curve Lichess uses for its Accuracy stat. We take the **median**
   win% across those candidates: any move sitting more than a small gap
-  above that median counts as part of the "top cluster". If that
-  cluster has 1–2 moves, the position was scarce → **Good**. If 3+,
-  it's **Correct**. If nothing separates from the median at all
-  (every candidate is basically equally good), the whole set counts as
-  the cluster → **Correct**.
+  above that median counts as part of the "top cluster". A move only
+  becomes **Good** if that cluster has 1-2 moves **and** playing it is
+  a genuine gain (by default, 8+ win% points) over where this same
+  player already stood two of their own moves ago — i.e. before the
+  opponent's intervening move. This is what keeps an obvious,
+  forced-looking retreat (e.g. a hanging knight with only one or two
+  safe squares) from scoring the same as a real find: moving the
+  knight back to safety doesn't improve on where White already was, it
+  just avoids losing what was already fine, so it's scored **Correct**
+  instead. If the cluster has 3+ moves, or the gain check fails, it's
+  Correct.
 - **Brilliant** — a second, retrospective pass over the finished game.
   The first "Good" move opens a window of that player's own following
-  moves (3 plies near the opening, up to 10 in the endgame — Carlsen
-  has described his own calculation depth as ranging roughly 2 to 20
-  moves depending on the moment of the game; 10 is used here as the
-  practical ceiling). If every one of the player's moves in that
-  window keeps landing in a scarce top cluster (≤2) without the
-  advantage collapsing, the origin move is upgraded to Brilliant. No
+  moves. The window length is configurable separately for the opening
+  (before move 15) and the rest of the game, both defaulting to 2 —
+  i.e. 2 full moves of your own, matching Carlsen's comment that his
+  own calculation ranges roughly 2 to 20 moves ahead depending on the
+  moment of the game (exactly what he meant by "moves" there — full
+  moves or plies — isn't something we could pin to a precise source,
+  so treat the defaults as a starting point to tune, not a strict
+  quote). If every one of the player's moves in that window keeps
+  landing in a scarce top cluster (≤2) without the advantage
+  collapsing, the origin move is upgraded to Brilliant. No
   material-sacrifice detection is required — a Tal-style piece left
   "hanging" while pushing a different plan shows up naturally through
   this same scarcity/depth method.
 - **Mistake / Blunder** — the classic win%-drop-from-best check, using
   the two thresholds set in the settings panel (defaults: 10 and 20
   points).
+
+All five thresholds (Mistake drop, Blunder drop, Good's minimum gain,
+and the two Brilliant chain lengths) are exposed in the gear-icon
+settings panel specifically so they're easy to retune while testing
+against real games — nothing about their default values is meant to
+be final.
 
 ## 4. Known limitations of this prototype
 
@@ -124,3 +137,17 @@ than hiding:
   board, etc.).
 - No opening/PGN edge cases like variations, NAGs, or annotated
   comments in the PGN are handled — plain mainline PGN only.
+- There's no drag-and-drop / click-to-move board for playing out your
+  own moves. Adding that means live re-analysis after every manual
+  move, handling promotions and illegal-move feedback, and deciding
+  what happens to the loaded game's classification once you deviate
+  from it — enough extra scope that it felt better left out of a first
+  prototype than done halfway.
+- Pieces are Unicode chess glyphs (styled a bit, with a subtle outline)
+  rather than the actual Lichess/cburnett SVG piece set. Hot-linking
+  those SVGs from lila's GitHub repo would be easy in principle, but
+  wasn't done here to avoid a fragile external dependency in a
+  prototype; if you want them, download the `cburnett` folder from
+  https://github.com/lichess-org/lila/tree/master/public/piece/cburnett
+  and swap `placeSquare()` in `app.js` to render `<img>` tags instead
+  of the `PIECE_GLYPHS` text.

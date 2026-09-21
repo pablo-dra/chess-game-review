@@ -3,13 +3,23 @@
  *
  * Implements the move-classification proposal:
  *   Book      - matches known opening theory (Lichess Masters explorer)
- *   Correct   - after book, 3+ moves give practically the same win%
- *   Good      - only 1-2 moves give a significant advantage, and the
- *               player found one of them (works whether the opponent's
- *               previous move was a mistake, a blunder, or just "correct")
- *   Brilliant - the first "Good" move that opens a window (3-10 plies,
- *               scaling with game phase) in which the same scarcity
- *               keeps holding for that player, checked in retrospect
+ *   Correct   - after book, 3+ moves give practically the same win%,
+ *               OR the position was merely defended back to parity
+ *               (see "genuine gain" below)
+ *   Good      - only 1-2 moves give a significant advantage, AND playing
+ *               one of them actually improved the mover's position
+ *               relative to where it stood before the opponent's last
+ *               move (not just "the least-bad option available now").
+ *               This is what keeps a forced-but-obvious retreat (a
+ *               hanging knight with only one safe square) from being
+ *               scored the same as a genuinely spotted opportunity: if
+ *               the position only returns to where it already was, the
+ *               opponent's move cost them nothing and there was nothing
+ *               to "convert".
+ *   Brilliant - the first "Good" move that opens a window (configurable
+ *               length, can differ between opening and endgame) in
+ *               which the same scarcity keeps holding for that player,
+ *               checked in retrospect
  *   Mistake / Blunder - classic win% drop from the best available move
  *
  * This file has NO dependency on the engine or the UI: it just takes
@@ -20,7 +30,7 @@
 const Classification = (() => {
 
   const LABELS = {
-    BOOK:      { key: "BOOK",      symbol: "\u{1F5AE}", name: "Book",      color: "#88A17F" },
+    BOOK:      { key: "BOOK",      symbol: "\u{1F4D6}", name: "Book",      color: "#88A17F" },
     CORRECT:   { key: "CORRECT",   symbol: "\u2713",     name: "Correct",   color: "#81C45D" },
     GOOD:      { key: "GOOD",      symbol: "!",          name: "Good",      color: "#4CA2E3" },
     BRILLIANT: { key: "BRILLIANT", symbol: "!!",         name: "Brilliant", color: "#8A6CEF" },
@@ -81,18 +91,24 @@ const Classification = (() => {
    *
    * @param {Object} position
    *   { multipv: [{cp|mate, moveUci}], playedMoveUci, isBook, moverColor,
-   *     playedScore? }
+   *     playedScore?, baselineWinPercent? }
    *   multipv is already sorted best-first, from the mover's perspective.
    *   playedScore ({cp|mate}) is optional: pass it whenever the played
    *   move's own evaluation was actually queried from the engine (e.g.
    *   via "go searchmoves") instead of being guessed, which is the
    *   normal case whenever the played move isn't one of the top MultiPV
    *   lines. Without it, a rough guess is used as a last resort.
-   * @param {Object} thresholds { mistake, blunder, gapPoints }
-   * @returns {Object} { label, dropPoints, clusterSize, bestWinPercent, playedWinPercent }
+   *   baselineWinPercent is this same player's own win% right after
+   *   their own previous move (i.e. before the opponent's intervening
+   *   move) - used to check whether this move is a genuine gain, not
+   *   just a return to a position that was already fine. Pass 50 (or
+   *   omit) when there's no earlier move of theirs to compare against.
+   * @param {Object} thresholds { mistake, blunder, gapPoints, goodGain }
+   * @returns {Object} { label, dropPoints, clusterSize, gain, bestWinPercent, playedWinPercent }
    */
   function classifyMove(position, thresholds) {
     const { mistake, blunder, gapPoints } = thresholds;
+    const goodGain = thresholds.goodGain ?? 8;
 
     if (position.isBook) {
       return { label: LABELS.BOOK, dropPoints: 0, clusterSize: null };
@@ -125,38 +141,49 @@ const Classification = (() => {
     }
 
     const clusterSize = topClusterSize(winPercents, gapPoints);
-    const label = clusterSize <= 2 ? LABELS.GOOD : LABELS.CORRECT;
-    return { label, dropPoints, clusterSize, bestWinPercent, playedWinPercent };
+    const baseline = position.baselineWinPercent ?? 50;
+    const gain = playedWinPercent - baseline;
+
+    // Scarce AND an actual improvement over where this player already
+    // stood -> Good. Scarce but merely restoring/holding what was
+    // already there (e.g. saving a piece that was hanging) -> Correct,
+    // same as when there were plenty of equally-fine options: nothing
+    // was "converted" either way.
+    const label = (clusterSize <= 2 && gain > goodGain) ? LABELS.GOOD : LABELS.CORRECT;
+    return { label, dropPoints, clusterSize, gain, bestWinPercent, playedWinPercent };
   }
 
   /**
-   * Brilliant window length in plies-of-that-player, scaling with game
-   * phase, per Carlsen's own comment that his calculation ranges from
-   * about 2 to 20 moves ahead depending on the moment of the game.
-   * Capped at 10 here as the practical ceiling discussed.
+   * Brilliant window length, in the number of the ORIGIN PLAYER'S OWN
+   * subsequent moves to check (not total plies). Configurable and
+   * allowed to differ between the opening and the endgame, per
+   * Carlsen's comment that his own calculation ranges roughly from 2 to
+   * 20 moves ahead depending on the moment of the game - exact meaning
+   * of "moves" there (full moves vs. plies) isn't something we could
+   * pin down to a precise source, so treat these as tunable knobs
+   * rather than a strict quote.
    */
-  function brilliantWindow(moveNumber) {
-    if (moveNumber < 15) return 3;
-    if (moveNumber < 30) return 6;
-    return 10;
+  function brilliantWindow(moveNumber, earlyLength, lateLength) {
+    return moveNumber < 15 ? earlyLength : lateLength;
   }
 
   /**
    * Second pass over an already-classified game: upgrade the first
    * "Good" move of a scarcity chain to "Brilliant" if the same player's
-   * following moves (within the phase-scaled window) keep landing in a
+   * following moves (within the configured window) keep landing in a
    * scarce top cluster (<=2) without the advantage collapsing.
    *
    * @param {Array} classifiedMoves  in game order, each item:
    *   { color: 'w'|'b', moveNumber, label, clusterSize, bestWinPercent, playedWinPercent }
    *   (as produced by classifyMove, one entry per ply)
+   * @param {Object} windowSettings { early, late } - see brilliantWindow()
    */
-  function upgradeBrilliants(classifiedMoves) {
+  function upgradeBrilliants(classifiedMoves, windowSettings = { early: 2, late: 2 }) {
     for (let i = 0; i < classifiedMoves.length; i++) {
       const origin = classifiedMoves[i];
       if (origin.label.key !== "GOOD") continue;
 
-      const window = brilliantWindow(origin.moveNumber);
+      const window = brilliantWindow(origin.moveNumber, windowSettings.early, windowSettings.late);
       const sameColorFollowing = [];
       for (let j = i + 1; j < classifiedMoves.length && sameColorFollowing.length < window; j++) {
         if (classifiedMoves[j].color === origin.color) sameColorFollowing.push(classifiedMoves[j]);
