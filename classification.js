@@ -166,15 +166,29 @@ const Classification = (() => {
   /**
    * Brilliant window length, in the number of the ORIGIN PLAYER'S OWN
    * subsequent moves to check (not total plies). Configurable and
-   * allowed to differ between the opening and the endgame, per
-   * Carlsen's comment that his own calculation ranges roughly from 2 to
-   * 20 moves ahead depending on the moment of the game - exact meaning
-   * of "moves" there (full moves vs. plies) isn't something we could
-   * pin down to a precise source, so treat these as tunable knobs
-   * rather than a strict quote.
+   * allowed to differ between the opening and the endgame - but "game
+   * phase" here is driven by how much material is left on the board,
+   * not the move number (move 15 doesn't reliably mean anything
+   * endgame-like; a queen-less position at move 10 does). The result
+   * is smoothly interpolated between the two configured lengths rather
+   * than switching abruptly at a cutoff.
+   *
+   * @param {number} materialRatio  total non-king material still on
+   *   the board, divided by the starting total (1.0 = full material,
+   *   0.0 = bare kings). See app.js: materialRatioFromFen().
    */
-  function brilliantWindow(moveNumber, earlyLength, lateLength) {
-    return moveNumber < 15 ? earlyLength : lateLength;
+  function brilliantWindow(materialRatio, earlyLength, lateLength) {
+    // Above this ratio, treated as fully "opening/early game" (~2-3
+    // pawns' worth captured at most). At or below the low ratio -
+    // roughly a queen or minor piece plus a couple of pawns left, per
+    // the "late game" description discussed - treated as fully
+    // "endgame". Linear interpolation in between.
+    const HIGH_RATIO = 0.8;
+    const LOW_RATIO = 0.13;
+    const clamped = Math.max(LOW_RATIO, Math.min(HIGH_RATIO, materialRatio));
+    const t = (clamped - LOW_RATIO) / (HIGH_RATIO - LOW_RATIO); // 0 (late) .. 1 (early)
+    const interpolated = lateLength + t * (earlyLength - lateLength);
+    return Math.max(1, Math.round(interpolated));
   }
 
   /**
@@ -186,8 +200,9 @@ const Classification = (() => {
    * the advantage) since they weren't a real decision either way.
    *
    * @param {Array} classifiedMoves  in game order, each item:
-   *   { color: 'w'|'b', moveNumber, label, clusterSize, bestWinPercent, playedWinPercent }
-   *   (as produced by classifyMove, one entry per ply)
+   *   { color: 'w'|'b', moveNumber, materialRatio, label, clusterSize,
+   *     bestWinPercent, playedWinPercent } (as produced by
+   *   classifyMove + app.js, one entry per ply)
    * @param {Object} windowSettings { early, late } - see brilliantWindow()
    */
   function upgradeBrilliants(classifiedMoves, windowSettings = { early: 2, late: 2 }) {
@@ -195,7 +210,7 @@ const Classification = (() => {
       const origin = classifiedMoves[i];
       if (origin.label.key !== "GOOD") continue;
 
-      const window = brilliantWindow(origin.moveNumber, windowSettings.early, windowSettings.late);
+      const window = brilliantWindow(origin.materialRatio ?? 1, windowSettings.early, windowSettings.late);
       const sameColorFollowing = [];
       for (let j = i + 1; j < classifiedMoves.length && sameColorFollowing.length < window; j++) {
         if (classifiedMoves[j].color === origin.color && classifiedMoves[j].label.key !== "FORCED") {
@@ -218,12 +233,29 @@ const Classification = (() => {
     return classifiedMoves;
   }
 
+  // Used by markTopMoveChains: a chain only counts as "yours" if the
+  // opponent wasn't simply handing you material for free throughout
+  // it (e.g. dropping a queen onto a square you naturally capture).
+  // If the opponent themselves played a Mistake or Blunder anywhere
+  // inside the chain's span, it's their error being converted, not a
+  // demonstration of skill on the chain's own terms - so the run is
+  // disqualified from this specific Brilliant path.
+  function opponentPlayedReasonably(classifiedMoves, fromIndex, toIndex) {
+    for (let j = fromIndex + 1; j < toIndex; j++) {
+      const key = classifiedMoves[j].label.key;
+      if (key === "MISTAKE" || key === "BLUNDER") return false;
+    }
+    return true;
+  }
+
   /**
    * Alternative, additive path to Brilliant: instead of requiring
    * scarce alternatives, this rewards simply finding the engine's own
    * #1 move several times in a row for the same player, when doing so
-   * builds up a real gain overall. This is meant to catch a "played a
-   * clean forcing sequence" pattern that doesn't necessarily involve
+   * builds up a real gain overall AND the opponent was putting up
+   * reasonable resistance throughout (not just gifting material) - see
+   * opponentPlayedReasonably() above. This is meant to catch a "played
+   * a clean forcing sequence" pattern that doesn't necessarily involve
    * any single do-or-die decision - more of a sustained-accuracy combo
    * than a single spotted shot. Only the first move of a qualifying
    * run is upgraded; the rest keep whatever label they already had
@@ -270,7 +302,8 @@ const Classification = (() => {
           const prevOwnIdx = streakStart > 0 ? ownIndices[streakStart - 1] : null;
           const baseline = prevOwnIdx !== null ? classifiedMoves[prevOwnIdx].playedWinPercent : 50;
           const gain = move.playedWinPercent - baseline;
-          if (gain >= minGain) {
+          const opponentHeldUp = opponentPlayedReasonably(classifiedMoves, startIdx, idx);
+          if (gain >= minGain && opponentHeldUp) {
             classifiedMoves[startIdx].label = LABELS.BRILLIANT;
           }
         }

@@ -92,26 +92,33 @@ This mirrors the proposal, refined during discussion:
   of which is enough:
   1. *Scarcity chain* (the original idea): the first "Good" move opens
      a window of that player's own following moves. The window length
-     is configurable separately for the opening (before move 15) and
-     the rest of the game, both defaulting to 2 — i.e. 2 full moves of
-     your own, matching Carlsen's comment that his own calculation
-     ranges roughly 2 to 20 moves ahead depending on the moment of the
-     game (exactly what he meant by "moves" there — full moves or
-     plies — isn't something we could pin to a precise source, so
-     treat the defaults as a starting point to tune, not a strict
-     quote). If every one of the player's moves in that window keeps
-     landing in a scarce top cluster (≤2) without the advantage
-     collapsing, the origin move is upgraded to Brilliant.
+     is configurable separately for the opening and the endgame (both
+     defaulting to 2 of the player's own moves), and interpolated
+     smoothly between the two based on **how much material is left on
+     the board**, not the move number — a queen-less middlegame at
+     move 10 behaves like an endgame here, and a slow, piece-heavy
+     position at move 20 still behaves like the opening. Concretely:
+     material ≥80% of the starting total → the "early" length; ≤13%
+     (roughly a queen or a minor piece plus a couple of pawns, per the
+     "late game" description discussed) → the "late" length; linearly
+     interpolated in between. If every one of the player's moves in
+     that window keeps landing in a scarce top cluster (≤2) without
+     the advantage collapsing, the origin move is upgraded to
+     Brilliant.
   2. *Top-move chain* (added after testing against real games): reward
      simply finding the engine's actual #1 move several times in a row
      for the same player — even when the top cluster wasn't scarce at
      each individual step — as long as doing so builds up a real
-     advantage over the span. Default: 2 consecutive own moves, 10+
-     win% points gained overall. Only the *first* move of a qualifying
-     run gets upgraded to Brilliant; the rest keep whatever label they
-     already had (usually Correct). This is meant to catch a "played a
-     clean forcing sequence" pattern that doesn't hinge on any single
-     do-or-die decision.
+     advantage over the span, **and the opponent was putting up
+     reasonable resistance throughout** (no Mistake/Blunder from them
+     anywhere in the chain's span). That second condition is what
+     stops a run of "opponent hangs a piece, you recapture, twice in a
+     row" from reading as your own Brilliant — it's their error being
+     converted, not a demonstration of skill on the chain's own terms.
+     Default: 2 consecutive own moves, 10+ win% points gained overall.
+     Only the *first* move of a qualifying run gets upgraded to
+     Brilliant; the rest keep whatever label they already had (usually
+     Correct).
 
   Both paths ignore Forced moves in between (they don't count toward
   either chain, and don't break one either, since they involve no real
@@ -131,7 +138,11 @@ All thresholds (Mistake drop, Blunder drop, Good's minimum gain, the
 two scarcity-chain lengths, and the two top-move-chain settings) are
 exposed in the gear-icon settings panel specifically so they're easy
 to retune while testing against real games — nothing about their
-default values is meant to be final.
+default values is meant to be final. The 80%/13% material breakpoints
+that drive the early/late interpolation are not yet exposed as
+settings (they're constants inside `brilliantWindow()` in
+`classification.js`) — worth adding to the panel too if they turn out
+to need tuning.
 
 ## 4. Exporting the analyzed game
 

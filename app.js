@@ -152,8 +152,24 @@ class EngineClient {
   }
 }
 
-// ---------- Opening explorer (Book detection) ----------
-// Uses lichess's public Masters explorer. If the network call fails
+// ---------- Game-phase detection (material on the board) ----------
+// Used to smoothly scale the Brilliant chain length between "early
+// game" and "endgame" settings, instead of a move-number cutoff: move
+// number alone doesn't reliably say how many pieces are left.
+const PIECE_VALUES = { p: 1, n: 3, b: 3, r: 5, q: 9 }; // kings excluded
+const STARTING_MATERIAL = 2 * (8 * 1 + 2 * 3 + 2 * 3 + 2 * 5 + 1 * 9); // = 78
+
+function materialRatioFromFen(fen) {
+  const placement = fen.split(" ")[0];
+  let total = 0;
+  for (const ch of placement) {
+    const value = PIECE_VALUES[ch.toLowerCase()];
+    if (value) total += value;
+  }
+  return total / STARTING_MATERIAL;
+}
+
+// ---------- Opening explorer (Book detection) ----------// Uses lichess's public Masters explorer. If the network call fails
 // (offline, blocked), we fall back to a simple "first few low-eval
 // plies" heuristic and say so in the engine status line.
 let explorerAvailable = true;
@@ -327,6 +343,7 @@ async function runAnalysis() {
     classified[i] = {
       color: ply.color,
       moveNumber: ply.moveNumber,
+      materialRatio: materialRatioFromFen(ply.fenBefore),
       label: result.label,
       dropPoints: result.dropPoints,
       clusterSize: result.clusterSize,
