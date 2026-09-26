@@ -110,15 +110,18 @@ This mirrors the proposal, refined during discussion:
      for the same player — even when the top cluster wasn't scarce at
      each individual step — as long as doing so builds up a real
      advantage over the span, **and the opponent was putting up
-     reasonable resistance throughout** (no Mistake/Blunder from them
-     anywhere in the chain's span). That second condition is what
-     stops a run of "opponent hangs a piece, you recapture, twice in a
-     row" from reading as your own Brilliant — it's their error being
-     converted, not a demonstration of skill on the chain's own terms.
-     Default: 2 consecutive own moves, 10+ win% points gained overall.
-     Only the *first* move of a qualifying run gets upgraded to
-     Brilliant; the rest keep whatever label they already had (usually
-     Correct).
+     reasonable resistance throughout**. That second condition has two
+     independent parts, either one disqualifies the chain: the
+     opponent played a Mistake/Blunder somewhere in the span, **or**
+     their move wasn't among the analyzed top-N candidates at all —
+     added after finding a real case where a roughly-equal, "almost
+     any move is worth about the same" position let an opponent's move
+     slip through as technically-not-a-Mistake (win% barely dropped)
+     while still being outside the handful of moves the engine
+     actually flagged as reasonable. Default: 2 consecutive own moves,
+     10+ win% points gained overall. Only the *first* move of a
+     qualifying run gets upgraded to Brilliant; the rest keep whatever
+     label they already had (usually Correct).
 
   Both paths ignore Forced moves in between (they don't count toward
   either chain, and don't break one either, since they involve no real

@@ -235,15 +235,25 @@ const Classification = (() => {
 
   // Used by markTopMoveChains: a chain only counts as "yours" if the
   // opponent wasn't simply handing you material for free throughout
-  // it (e.g. dropping a queen onto a square you naturally capture).
-  // If the opponent themselves played a Mistake or Blunder anywhere
-  // inside the chain's span, it's their error being converted, not a
-  // demonstration of skill on the chain's own terms - so the run is
-  // disqualified from this specific Brilliant path.
+  // it (e.g. dropping a queen onto a square you naturally capture), OR
+  // playing something so far outside the engine's own shortlist that
+  // it wasn't a real test even in a roughly-equal position where no
+  // single move looks like a big win%-drop "Mistake" on paper. Two
+  // independent disqualifiers, either one is enough:
+  //  1. The opponent's move was itself labeled Mistake/Blunder.
+  //  2. The opponent's move wasn't among the analyzed top-N candidates
+  //     at all (matchedCandidate === false) - this catches the flat,
+  //     "every move is worth about the same" positions where a weak
+  //     try never drops enough win% to trip threshold #1, but still
+  //     wasn't one of the moves the engine considered worth listing.
+  // Book and Forced opponent moves are exempt from both checks (no
+  // real choice, or well-established theory either way).
   function opponentPlayedReasonably(classifiedMoves, fromIndex, toIndex) {
     for (let j = fromIndex + 1; j < toIndex; j++) {
-      const key = classifiedMoves[j].label.key;
-      if (key === "MISTAKE" || key === "BLUNDER") return false;
+      const m = classifiedMoves[j];
+      if (m.label.key === "FORCED" || m.label.key === "BOOK") continue;
+      if (m.label.key === "MISTAKE" || m.label.key === "BLUNDER") return false;
+      if (m.matchedCandidate === false) return false;
     }
     return true;
   }

@@ -314,10 +314,11 @@ async function runAnalysis() {
 
     let multipv = [];
     let playedScore = null;
+    let matchedCandidate = true; // book/forced default to "reasonable"; see below
     if (!isForced && !isBook) {
       multipv = await engine.analyze(ply.fenBefore, settings.depth, settings.multipv);
-      const playedIsInMultipv = multipv.some(m => m.moveUci === ply.moveUci);
-      if (!playedIsInMultipv) {
+      matchedCandidate = multipv.some(m => m.moveUci === ply.moveUci);
+      if (!matchedCandidate) {
         // Query the played move's own evaluation directly instead of
         // guessing it, then put MultiPV back for the next position.
         playedScore = await engine.evaluateMove(ply.fenBefore, ply.moveUci, settings.depth);
@@ -344,6 +345,7 @@ async function runAnalysis() {
       color: ply.color,
       moveNumber: ply.moveNumber,
       materialRatio: materialRatioFromFen(ply.fenBefore),
+      matchedCandidate,
       label: result.label,
       dropPoints: result.dropPoints,
       clusterSize: result.clusterSize,
