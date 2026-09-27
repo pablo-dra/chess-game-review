@@ -195,26 +195,31 @@ const Classification = (() => {
    * Second pass over an already-classified game: upgrade the first
    * "Good" move of a scarcity chain to "Brilliant" if the same player's
    * following moves (within the configured window) keep landing in a
-   * scarce top cluster (<=2) without the advantage collapsing. Forced
-   * moves in between are skipped (not counted, not required to hold
-   * the advantage) since they weren't a real decision either way.
+   * scarce top cluster (<=2) without the advantage collapsing, AND the
+   * opponent was putting up real resistance throughout that same span
+   * - see opponentPlayedReasonably() below. Forced moves in between are
+   * skipped (not counted, not required to hold the advantage) since
+   * they weren't a real decision either way.
    *
    * @param {Array} classifiedMoves  in game order, each item:
    *   { color: 'w'|'b', moveNumber, materialRatio, label, clusterSize,
-   *     bestWinPercent, playedWinPercent } (as produced by
-   *   classifyMove + app.js, one entry per ply)
+   *     bestWinPercent, playedWinPercent, candidates, matchedCandidate }
+   *   (as produced by classifyMove + app.js, one entry per ply)
    * @param {Object} windowSettings { early, late } - see brilliantWindow()
+   * @param {number} opponentGapRatio - see opponentPlayedReasonably()
    */
-  function upgradeBrilliants(classifiedMoves, windowSettings = { early: 2, late: 2 }) {
+  function upgradeBrilliants(classifiedMoves, windowSettings = { early: 2, late: 2 }, opponentGapRatio = 0.3) {
     for (let i = 0; i < classifiedMoves.length; i++) {
       const origin = classifiedMoves[i];
       if (origin.label.key !== "GOOD") continue;
 
       const window = brilliantWindow(origin.materialRatio ?? 1, windowSettings.early, windowSettings.late);
       const sameColorFollowing = [];
+      let lastFollowingIndex = null;
       for (let j = i + 1; j < classifiedMoves.length && sameColorFollowing.length < window; j++) {
         if (classifiedMoves[j].color === origin.color && classifiedMoves[j].label.key !== "FORCED") {
           sameColorFollowing.push(classifiedMoves[j]);
+          lastFollowingIndex = j;
         }
       }
 
@@ -226,34 +231,77 @@ const Classification = (() => {
         m.playedWinPercent >= origin.playedWinPercent - 3 // small tolerance for engine noise
       );
 
-      if (advantageHeld) {
+      const opponentHeldUp = opponentPlayedReasonably(classifiedMoves, i, lastFollowingIndex, origin.color, opponentGapRatio);
+
+      if (advantageHeld && opponentHeldUp) {
         origin.label = LABELS.BRILLIANT;
       }
     }
     return classifiedMoves;
   }
 
-  // Used by markTopMoveChains: a chain only counts as "yours" if the
-  // opponent wasn't simply handing you material for free throughout
-  // it (e.g. dropping a queen onto a square you naturally capture), OR
-  // playing something so far outside the engine's own shortlist that
-  // it wasn't a real test even in a roughly-equal position where no
-  // single move looks like a big win%-drop "Mistake" on paper. Two
-  // independent disqualifiers, either one is enough:
-  //  1. The opponent's move was itself labeled Mistake/Blunder.
-  //  2. The opponent's move wasn't among the analyzed top-N candidates
-  //     at all (matchedCandidate === false) - this catches the flat,
-  //     "every move is worth about the same" positions where a weak
-  //     try never drops enough win% to trip threshold #1, but still
-  //     wasn't one of the moves the engine considered worth listing.
-  // Book and Forced opponent moves are exempt from both checks (no
-  // real choice, or well-established theory either way).
-  function opponentPlayedReasonably(classifiedMoves, fromIndex, toIndex) {
-    for (let j = fromIndex + 1; j < toIndex; j++) {
+  /**
+   * Judges whether the OPPONENT'S moves across a chain's span (from
+   * just after fromIndex to toIndex, inclusive of toIndex) were
+   * reasonable enough for the chain to reflect the origin player's own
+   * skill rather than the opponent simply giving material or position
+   * away. Used by both Brilliant paths. Two independent gates, checked
+   * per opponent move in the span - either one failing disqualifies
+   * the whole chain:
+   *
+   *  Gate 1 - the opponent's move must be one of the engine's analyzed
+   *  top-N candidates at all (matchedCandidate). A move so far outside
+   *  the shortlist that the engine never even reported it doesn't
+   *  count as "resistance", regardless of how small its win% drop
+   *  happens to look (this matters most in near-equal positions where
+   *  almost anything scores similarly and nothing looks like a
+   *  Mistake by the usual drop threshold).
+   *
+   *  Gate 2 - if it WAS one of the candidates, it also has to be one of
+   *  the *good* ones among that specific set, found by scanning the
+   *  candidates from best to worst and cutting the "reasonable" group
+   *  at the first gap that's large relative to the whole set's spread
+   *  (default: a gap over 30% of the top-to-bottom range). This
+   *  reproduces two different intuitions with one rule: when there's
+   *  one abrupt best move and the rest trail far behind, only that one
+   *  move passes; when the candidates are all close together, several
+   *  of the top ones pass and only the ones that trail off the group
+   *  fail. Example: candidates [9, 4, -1, -1, -1] -> only 9 passes
+   *  (the very next value is already a big relative jump down).
+   *  Candidates [4, 3.98, 3.96, 3.9, 3.9] -> 4, 3.98 and 3.96 all pass
+   *  (tightly bunched together), only the trailing 3.9s fail.
+   *
+   * Book and Forced opponent moves are exempt from both gates (no real
+   * choice, or well-established theory either way). The origin
+   * player's own intermediate moves within the span (when the window
+   * covers more than one of their own moves) are skipped entirely here
+   * - they're judged by the caller's own advantage/scarcity check, not
+   * by these opponent-facing gates.
+   */
+  function opponentPlayedReasonably(classifiedMoves, fromIndex, toIndex, originColor, opponentGapRatio = 0.3) {
+    for (let j = fromIndex + 1; j <= toIndex; j++) {
       const m = classifiedMoves[j];
+      if (m.color === originColor) continue; // the origin player's own move, judged elsewhere - not the opponent's
       if (m.label.key === "FORCED" || m.label.key === "BOOK") continue;
-      if (m.label.key === "MISTAKE" || m.label.key === "BLUNDER") return false;
+
+      // Gate 1
       if (m.matchedCandidate === false) return false;
+
+      // Gate 2 - only meaningful if we actually have the candidate list
+      if (!m.candidates || m.candidates.length < 2) continue;
+      const values = m.candidates.map(c => c.winPercent).sort((a, b) => b - a);
+      const range = values[0] - values[values.length - 1];
+      let cutoffValue = values[values.length - 1]; // default: whole set passes
+      if (range > 1e-6) {
+        for (let k = 0; k < values.length - 1; k++) {
+          const gap = values[k] - values[k + 1];
+          if (gap / range > opponentGapRatio) {
+            cutoffValue = values[k];
+            break;
+          }
+        }
+      }
+      if (m.playedWinPercent < cutoffValue - 1e-6) return false;
     }
     return true;
   }
@@ -277,11 +325,12 @@ const Classification = (() => {
    * choice either way.
    *
    * @param {Array} classifiedMoves  in game order (same shape as above)
-   * @param {Object} options { chainLength = 2, minGain = 10 }
+   * @param {Object} options { chainLength = 2, minGain = 10, opponentGapRatio = 0.3 }
    */
   function markTopMoveChains(classifiedMoves, options = {}) {
     const chainLength = options.chainLength ?? 2;
     const minGain = options.minGain ?? 10;
+    const opponentGapRatio = options.opponentGapRatio ?? 0.3;
 
     ["w", "b"].forEach(color => {
       const ownIndices = [];
@@ -312,7 +361,7 @@ const Classification = (() => {
           const prevOwnIdx = streakStart > 0 ? ownIndices[streakStart - 1] : null;
           const baseline = prevOwnIdx !== null ? classifiedMoves[prevOwnIdx].playedWinPercent : 50;
           const gain = move.playedWinPercent - baseline;
-          const opponentHeldUp = opponentPlayedReasonably(classifiedMoves, startIdx, idx);
+          const opponentHeldUp = opponentPlayedReasonably(classifiedMoves, startIdx, idx, color, opponentGapRatio);
           if (gain >= minGain && opponentHeldUp) {
             classifiedMoves[startIdx].label = LABELS.BRILLIANT;
           }

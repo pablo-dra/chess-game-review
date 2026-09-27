@@ -103,31 +103,53 @@ This mirrors the proposal, refined during discussion:
      "late game" description discussed) → the "late" length; linearly
      interpolated in between. If every one of the player's moves in
      that window keeps landing in a scarce top cluster (≤2) without
-     the advantage collapsing, the origin move is upgraded to
-     Brilliant.
+     the advantage collapsing, **and the opponent was putting up
+     reasonable resistance throughout the same span** (see below), the
+     origin move is upgraded to Brilliant.
   2. *Top-move chain* (added after testing against real games): reward
      simply finding the engine's actual #1 move several times in a row
      for the same player — even when the top cluster wasn't scarce at
      each individual step — as long as doing so builds up a real
-     advantage over the span, **and the opponent was putting up
-     reasonable resistance throughout**. That second condition has two
-     independent parts, either one disqualifies the chain: the
-     opponent played a Mistake/Blunder somewhere in the span, **or**
-     their move wasn't among the analyzed top-N candidates at all —
-     added after finding a real case where a roughly-equal, "almost
-     any move is worth about the same" position let an opponent's move
-     slip through as technically-not-a-Mistake (win% barely dropped)
-     while still being outside the handful of moves the engine
-     actually flagged as reasonable. Default: 2 consecutive own moves,
-     10+ win% points gained overall. Only the *first* move of a
-     qualifying run gets upgraded to Brilliant; the rest keep whatever
-     label they already had (usually Correct).
+     advantage over the span, and, same as path 1, the opponent held
+     up their end. Default: 2 consecutive own moves, 10+ win% points
+     gained overall. Only the *first* move of a qualifying run gets
+     upgraded to Brilliant; the rest keep whatever label they already
+     had (usually Correct).
 
-  Both paths ignore Forced moves in between (they don't count toward
-  either chain, and don't break one either, since they involve no real
-  choice). No material-sacrifice detection is required for either path
-  — a Tal-style piece left "hanging" while pushing a different plan
-  shows up naturally through the scarcity-chain method.
+  **Judging the opponent's moves** (shared by both paths, found in
+  `opponentPlayedReasonably()`): after an early version let a couple of
+  false positives through — the opponent's move looked "fine" by a
+  plain win%-drop threshold, but only because the position was so flat
+  that nothing drops much — this now runs as two sequential gates
+  against every opponent move inside the chain's span:
+  1. Their move has to be one of the engine's analyzed top-N candidates
+     at all. A move so far outside the shortlist that the engine never
+     even reported it doesn't count as resistance, no matter how small
+     its measured win% drop happens to look.
+  2. If it was one of the candidates, it also has to be one of the
+     *good* ones among that specific set. This is found by sorting that
+     position's candidates best-to-worst and cutting the "reasonable"
+     group at the first gap that's large *relative to that set's own
+     spread* (default: a drop bigger than 30% of the top-to-bottom
+     range disqualifies everything past that point). One rule handles
+     two different shapes: candidates `[9, 4, -1, -1, -1]` → only the
+     `9` passes (the very next value is already a big relative drop);
+     candidates `[4, 3.98, 3.96, 3.9, 3.9]` → `4`, `3.98` and `3.96`
+     all pass (tightly bunched together, no real gap yet), only the
+     trailing `3.9`s fail.
+
+  Either gate failing on any opponent move in the span disqualifies
+  the whole chain for that origin move. The origin player's own moves
+  in between (when the window spans more than one) are explicitly
+  skipped here — those are judged separately by each path's own
+  advantage/scarcity check, not by these opponent-facing gates.
+
+  Both paths ignore Forced and Book moves in between (they don't count
+  toward either chain, don't break one, and are exempt from the
+  opponent-quality gates above, since none of the three involve a real
+  choice under scrutiny). No material-sacrifice detection is required
+  for either path — a Tal-style piece left "hanging" while pushing a
+  different plan shows up naturally through the scarcity-chain method.
 - **Forced** — when a position has exactly one legal move (e.g. the
   only way out of check), it's labeled Forced and skipped entirely:
   no engine analysis is run on it, and it can never be Good or start
@@ -138,7 +160,8 @@ This mirrors the proposal, refined during discussion:
   points).
 
 All thresholds (Mistake drop, Blunder drop, Good's minimum gain, the
-two scarcity-chain lengths, and the two top-move-chain settings) are
+two scarcity-chain lengths, the two top-move-chain settings, and the
+opponent gap ratio used by both chains' opponent-quality gate) are
 exposed in the gear-icon settings panel specifically so they're easy
 to retune while testing against real games — nothing about their
 default values is meant to be final. The 80%/13% material breakpoints

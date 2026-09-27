@@ -210,6 +210,7 @@ function readSettings() {
     brilliantLate: parseInt(el("brilliantLateInput").value, 10) || 2,
     topChainLength: parseInt(el("topChainLengthInput").value, 10) || 2,
     topChainGain: parseInt(el("topChainGainInput").value, 10) || 10,
+    opponentGapRatio: (parseInt(el("opponentGapRatioInput").value, 10) || 30) / 100,
     minBookGames: 50,
   };
 }
@@ -365,8 +366,8 @@ async function runAnalysis() {
   }
 
   if (!cancelRequested) {
-    Classification.upgradeBrilliants(classified, { early: settings.brilliantEarly, late: settings.brilliantLate });
-    Classification.markTopMoveChains(classified, { chainLength: settings.topChainLength, minGain: settings.topChainGain });
+    Classification.upgradeBrilliants(classified, { early: settings.brilliantEarly, late: settings.brilliantLate }, settings.opponentGapRatio);
+    Classification.markTopMoveChains(classified, { chainLength: settings.topChainLength, minGain: settings.topChainGain, opponentGapRatio: settings.opponentGapRatio });
     renderMoveList();
     renderStats();
     progressFill.style.width = "100%";

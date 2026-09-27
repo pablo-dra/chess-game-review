@@ -73,7 +73,11 @@
         Top-move chain min. gain (win% built up over the chain)
         <input type="number" id="topChainGainInput" min="1" max="60" value="10" />
       </label>
-      <p class="settings-note">Higher depth and MultiPV give more reliable classifications but take longer per move. The "min. gain" threshold is what keeps a forced-but-obvious retreat (e.g. saving a hanging piece) from being scored as a Good move: it must actually improve on where you already stood, not just be the only sane option. The two "chain" settings are two independent, additive ways to earn a Brilliant: a scarce-alternatives chain, or a run of playing the engine's actual best move several times while building a real advantage.</p>
+      <label>
+        Opponent gap ratio % (how much of a relative drop disqualifies their move)
+        <input type="number" id="opponentGapRatioInput" min="5" max="90" value="30" />
+      </label>
+      <p class="settings-note">Higher depth and MultiPV give more reliable classifications but take longer per move. The "min. gain" threshold is what keeps a forced-but-obvious retreat (e.g. saving a hanging piece) from being scored as a Good move: it must actually improve on where you already stood, not just be the only sane option. The two "chain" settings are two independent, additive ways to earn a Brilliant: a scarce-alternatives chain, or a run of playing the engine's actual best move several times while building a real advantage. Both chains also require the opponent to have played reasonably throughout — one of the analyzed candidates, and not one that trailed too far (by the "gap ratio") behind the best ones available to them — otherwise it's their mistake being converted, not your Brilliant.</p>
     </div>
 
     <h2 class="section-heading">Moves</h2>
