@@ -71,23 +71,37 @@ This mirrors the proposal, refined during discussion:
   called live from your browser). If that call fails (offline, etc.)
   it falls back to a rough heuristic of "the first 6 plies" and says
   so in the engine status line.
-- **Correct / Good** — for every non-book position, the engine reports
-  the top ~5 candidate moves (MultiPV) at a fixed depth (default 18,
-  matching what Lichess's own server analysis already uses). Each
-  candidate's centipawn score is converted to a win% using the same
-  curve Lichess uses for its Accuracy stat. We take the **median**
-  win% across those candidates: any move sitting more than a small gap
-  above that median counts as part of the "top cluster". A move only
-  becomes **Good** if that cluster has 1-2 moves **and** playing it is
-  a genuine gain (by default, 8+ win% points) over where this same
-  player already stood two of their own moves ago — i.e. before the
-  opponent's intervening move. This is what keeps an obvious,
-  forced-looking retreat (e.g. a hanging knight with only one or two
-  safe squares) from scoring the same as a real find: moving the
-  knight back to safety doesn't improve on where White already was, it
-  just avoids losing what was already fine, so it's scored **Correct**
-  instead. If the cluster has 3+ moves, or the gain check fails, it's
-  Correct.
+- **Best / Correct / Good** — for every non-book position, the engine
+  reports the top ~5 candidate moves (MultiPV) at a fixed depth
+  (default 18, matching what Lichess's own server analysis already
+  uses). Each candidate's centipawn score is converted to a win% using
+  the same curve Lichess uses for its Accuracy stat. We take the
+  **median** win% across those candidates: any move sitting more than
+  a small gap above that median counts as part of the "top cluster". A
+  move only becomes **Good** if that cluster has 1-2 moves **and**
+  playing it is a genuine gain (by default, 8+ win% points) over where
+  this same player already stood two of their own moves ago — i.e.
+  before the opponent's intervening move. This is what keeps an
+  obvious, forced-looking retreat (e.g. a hanging knight with only one
+  or two safe squares) from scoring the same as a real find: moving
+  the knight back to safety doesn't improve on where White already
+  was, it just avoids losing what was already fine, so it's scored
+  **Correct** instead (a scarce move that failed the gain check always
+  lands here, never in Best — see below for why).
+
+  If the cluster has 3+ moves — i.e. no scarce standout, plenty of
+  roughly-equal options — the median-based cluster check doesn't have
+  anything more useful to say, so within that group we fall back to a
+  much simpler split: the plain **mean** of the candidates' win%. A
+  move above that mean is **Best**; at or below it, it's **Correct**.
+  Concretely: candidates at 51.95/51.65/50.4/50.1/49% (mean ≈50.62%) —
+  playing 51.95% or 51.65% earns Best, playing any of the other three
+  stays Correct. This only applies to the "everyone's about equal"
+  case; a scarce (≤2) move that merely held its ground never gets
+  promoted to Best through this path, since the point of that
+  distinction is specifically to flag "you found a genuinely better
+  option among many good ones", not to soften the Good/Correct gain
+  requirement discussed above.
 - **Brilliant** — now has **two independent, additive** paths, either
   of which is enough:
   1. *Scarcity chain* (the original idea): the first "Good" move opens

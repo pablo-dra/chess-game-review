@@ -3,9 +3,14 @@
  *
  * Implements the move-classification proposal:
  *   Book      - matches known opening theory (Lichess Masters explorer)
- *   Correct   - after book, 3+ moves give practically the same win%,
- *               OR the position was merely defended back to parity
- *               (see "genuine gain" below)
+ *   Best      - 3+ moves give practically the same win% (no scarce
+ *               standout), AND the played move is above the mean of
+ *               that tightly-bunched set - i.e. picked one of the
+ *               better ones even though the difference barely matters
+ *   Correct   - same "3+ similar moves" situation but picked one of
+ *               the below-mean ones, OR a scarce (<=2) move that only
+ *               defended back to parity without a genuine gain (see
+ *               Good below)
  *   Good      - only 1-2 moves give a significant advantage, AND playing
  *               one of them actually improved the mover's position
  *               relative to where it stood before the opponent's last
@@ -32,6 +37,7 @@ const Classification = (() => {
   const LABELS = {
     BOOK:      { key: "BOOK",      symbol: "\u{1F4D6}", name: "Book",      color: "#88A17F" },
     FORCED:    { key: "FORCED",    symbol: "\u2192",     name: "Forced",    color: "#EAC566" },
+    BEST:      { key: "BEST",      symbol: "\u2605",     name: "Best",      color: "#287112" },
     CORRECT:   { key: "CORRECT",   symbol: "\u2713",     name: "Correct",   color: "#81C45D" },
     GOOD:      { key: "GOOD",      symbol: "!",          name: "Good",      color: "#4CA2E3" },
     BRILLIANT: { key: "BRILLIANT", symbol: "!!",         name: "Brilliant", color: "#8A6CEF" },
@@ -154,12 +160,29 @@ const Classification = (() => {
     const baseline = position.baselineWinPercent ?? 50;
     const gain = playedWinPercent - baseline;
 
-    // Scarce AND an actual improvement over where this player already
-    // stood -> Good. Scarce but merely restoring/holding what was
-    // already there (e.g. saving a piece that was hanging) -> Correct,
-    // same as when there were plenty of equally-fine options: nothing
-    // was "converted" either way.
-    const label = (clusterSize <= 2 && gain > goodGain) ? LABELS.GOOD : LABELS.CORRECT;
+    let label;
+    if (clusterSize <= 2 && gain > goodGain) {
+      // Scarce AND an actual improvement over where this player already
+      // stood -> Good.
+      label = LABELS.GOOD;
+    } else if (clusterSize <= 2) {
+      // Scarce but merely restoring/holding what was already there
+      // (e.g. saving a piece that was hanging) - nothing was
+      // "converted", so this stays Correct rather than Good.
+      label = LABELS.CORRECT;
+    } else {
+      // Plenty of roughly-equal options (no scarce standout). Rather
+      // than lump every one of these together, distinguish picking one
+      // of the better ones from picking one of the weaker ones, using
+      // the plain mean of the candidates - simpler than the gap-based
+      // clustering used elsewhere (see topClusterSize / the opponent
+      // gate), which is the right call specifically when everything
+      // really is close together: e.g. candidates at 51.95/51.65/50.4/
+      // 50.1/49% - playing 51.95 or 51.65 (above the ~50.6% mean) earns
+      // Best; playing 50.4, 50.1 or 49 (below it) stays Correct.
+      const mean = winPercents.reduce((a, b) => a + b, 0) / winPercents.length;
+      label = playedWinPercent > mean ? LABELS.BEST : LABELS.CORRECT;
+    }
     return { label, dropPoints, clusterSize, gain, isTopMove, bestWinPercent, playedWinPercent };
   }
 
@@ -226,7 +249,7 @@ const Classification = (() => {
       if (sameColorFollowing.length === 0) continue;
 
       const advantageHeld = sameColorFollowing.every(m =>
-        (m.label.key === "GOOD" || m.label.key === "CORRECT" || m.label.key === "BRILLIANT") &&
+        (m.label.key === "GOOD" || m.label.key === "CORRECT" || m.label.key === "BRILLIANT" || m.label.key === "BEST") &&
         m.clusterSize !== null && m.clusterSize <= 2 &&
         m.playedWinPercent >= origin.playedWinPercent - 3 // small tolerance for engine noise
       );

@@ -634,7 +634,7 @@ function renderCandidates(index) {
 }
 
 // ---------- Rendering: stats ----------
-const STAT_ORDER = ["BRILLIANT", "GOOD", "CORRECT", "BOOK", "FORCED", "MISTAKE", "BLUNDER"];
+const STAT_ORDER = ["BRILLIANT", "GOOD", "BEST", "CORRECT", "BOOK", "FORCED", "MISTAKE", "BLUNDER"];
 
 function renderStats() {
   const counts = {};
