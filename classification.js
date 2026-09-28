@@ -395,7 +395,55 @@ const Classification = (() => {
     return classifiedMoves;
   }
 
-  return { LABELS, winPercentFromScore, winPercentFromCp, median, topClusterSize, classifyMove, brilliantWindow, upgradeBrilliants, markTopMoveChains };
+  // ---------- Game accuracy % and a rough rating estimate ----------
+  // Accuracy uses Lichess's own published win%-based formula (see
+  // https://lichess.org/page/accuracy): a move that costs 0 win% is
+  // 100% accurate, and accuracy decays exponentially as the win%
+  // drop grows. dropPoints here is exactly what classifyMove already
+  // returns for every move (0 for Book/Forced).
+  function moveAccuracy(dropPoints) {
+    const accuracy = 103.1668 * Math.exp(-0.04354 * Math.max(0, dropPoints)) - 3.1669;
+    return Math.max(0, Math.min(100, accuracy));
+  }
+
+  // Lichess blends the plain average with the harmonic mean so a few
+  // bad moves pull the game score down more than a plain average would
+  // (documented behavior, exact "volatility weighting" they use isn't
+  // public - this is a transparent approximation of it, not a replica).
+  function gameAccuracy(moveAccuracies) {
+    if (!moveAccuracies || moveAccuracies.length === 0) return null;
+    const arithmetic = moveAccuracies.reduce((a, b) => a + b, 0) / moveAccuracies.length;
+    const harmonic = moveAccuracies.length / moveAccuracies.reduce((a, b) => a + 1 / Math.max(b, 0.1), 0);
+    return (arithmetic + harmonic) / 2;
+  }
+
+  // Rough, illustrative rating estimate from a game's accuracy % only.
+  // IMPORTANT: there is no validated, public formula for this anywhere
+  // - not at Lichess, not at chess.com (both keep their exact method
+  // undisclosed), and neither factors in opponent strength, which
+  // matters a lot. This is a simple piecewise-linear lookup calibrated
+  // loosely against community reference points, meant as a rough,
+  // for-fun ballpark - not a real rating. Always show it with a visible
+  // caveat, never as a bare, precise-looking number.
+  const RATING_ANCHORS = [
+    [0, 300], [50, 500], [60, 800], [70, 1100], [80, 1500],
+    [88, 1800], [93, 2100], [96, 2400], [98.5, 2700], [100, 3000],
+  ];
+  function estimateRatingFromAccuracy(accuracy) {
+    if (accuracy === null || accuracy === undefined) return null;
+    const clamped = Math.max(0, Math.min(100, accuracy));
+    for (let i = 0; i < RATING_ANCHORS.length - 1; i++) {
+      const [x0, y0] = RATING_ANCHORS[i];
+      const [x1, y1] = RATING_ANCHORS[i + 1];
+      if (clamped >= x0 && clamped <= x1) {
+        const t = (clamped - x0) / (x1 - x0);
+        return Math.round((y0 + t * (y1 - y0)) / 50) * 50; // round to nearest 50
+      }
+    }
+    return RATING_ANCHORS[RATING_ANCHORS.length - 1][1];
+  }
+
+  return { LABELS, winPercentFromScore, winPercentFromCp, median, topClusterSize, classifyMove, brilliantWindow, upgradeBrilliants, markTopMoveChains, moveAccuracy, gameAccuracy, estimateRatingFromAccuracy };
 })();
 
 // Allow this file to be required from Node for testing, while staying a

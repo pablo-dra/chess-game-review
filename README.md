@@ -1,4 +1,4 @@
-# Chess Review Prototype
+# Chess Game Review
 
 A small local web app that loads a PGN, runs it through Stockfish, and
 tags each move as **Book / Correct / Good / Brilliant / Mistake / Blunder**
@@ -194,13 +194,47 @@ e.g.:
 1. e4 {📖 Book} e5 {📖 Book} 2. Nf3 {! Good} ...
 ```
 
+Ticking "Include candidate moves + win% in export" adds each position's
+analyzed alternatives to that same comment, e.g.
+`{! Good | candidates: Qxc3 56.9%, bxc3 43.6%, g4 10.7%, e4 10.6%, h4 10.6%}`
+— useful for debugging a specific classification without having to
+step through the board in the UI move by move. If the opening was
+matched against Lichess's Masters explorer, the game headers also get
+an `[Opening "Name (ECO)"]` tag.
+
 PGN comments in `{ }` are part of the format and are simply ignored by
 any PGN reader that doesn't care about them, so this file re-imports
 cleanly anywhere (including back into this same tool) — useful for
 diffing how the algorithm's output changes as you retune the settings
 above, or for pasting into the GitHub issue as a worked example.
 
-## 5. Known limitations of this prototype
+## 5. Accuracy and rating estimate
+
+Once an analysis finishes, the panel above the move-count table shows
+each player's accuracy % and a rating estimate:
+
+- **Accuracy** uses Lichess's own published formula (win%-drop per
+  move, converted with `103.1668 * e^(-0.04354 * drop) - 3.1669`,
+  clamped to 0-100), then blends the plain average with the harmonic
+  mean across the game the same way Lichess's own accuracy score does
+  (their exact "volatility weighting" isn't public, so this is a
+  transparent approximation of it, not a byte-for-byte replica). This
+  part is on solid, checkable ground — the formula is publicly
+  documented and the numbers here match Lichess's own reference values
+  (e.g. a single 20-point win% drop mid-game gives ~40% accuracy for
+  that move either place).
+- The **rating estimate** next to it is a different story: there is no
+  validated, public formula anywhere for turning accuracy (or centipawn
+  loss) into a rating — Lichess and chess.com both keep their exact
+  methods undisclosed, and by their own users' accounts these estimates
+  swing wildly and don't account for the opponent's strength at all,
+  which matters a lot. What's shown here is a simple, openly-arbitrary
+  piecewise-linear lookup from accuracy alone (calibrated loosely
+  against community reference points), always prefixed with `~` and
+  paired with a visible disclaimer in the UI. Treat it as a fun
+  ballpark, not something to cite.
+
+## 6. Known limitations of this prototype
 
 These are simplifications made to keep a first version buildable in a
 reasonable amount of code — worth flagging in the GitHub issue rather
@@ -215,13 +249,18 @@ than hiding:
   being ranked among themselves (a mate-in-1 and a mate-in-6 both read
   as ~100%). This never matters for Book/Correct/Good, only in the
   rare case where multiple candidates are all forced mates.
-- The opening-book check calls Lichess's public API on every position
-  until the game leaves theory; this is fine for reviewing a handful
-  of games but would need local caching or a bundled dataset to run
-  offline or at scale.
-- The Brilliant window length uses fixed cutoffs (move 15 / move 30)
-  rather than a more nuanced phase detector (material left on the
-  board, etc.).
+- The opening-book check calls Lichess's public Masters explorer for
+  every position while still in book; each request is independent (a
+  single failed request only falls back to a heuristic for that one
+  move, it no longer disables the check for the rest of the game) and
+  any failure is logged to the browser console with its actual cause.
+  This is fine for reviewing a handful of games but would need local
+  caching or a bundled dataset to run offline or at scale, and if the
+  explorer is unreachable for the whole game, book detection falls
+  back to "the first 6 plies" for the whole thing — check the console
+  if that keeps happening, since it usually means every request is
+  failing for the same reason (rate limiting, a network block, etc.)
+  rather than theory genuinely ending that early.
 - No opening/PGN edge cases like variations, NAGs, or annotated
   comments in the PGN are handled — plain mainline PGN only.
 - There's no drag-and-drop / click-to-move board for playing out your

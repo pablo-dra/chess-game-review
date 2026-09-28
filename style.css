@@ -36,9 +36,11 @@ body {
 }
 .topbar h1 { font-size: 18px; margin: 0; font-weight: 600; }
 .topbar .subtitle { color: var(--text-dim); font-weight: 400; font-size: 14px; }
+.header-status { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
 .engine-status { font-size: 13px; color: var(--text-dim); }
 .engine-status.ready { color: var(--accent); }
 .engine-status.error { color: var(--c-blunder); }
+.opening-status { font-size: 12px; color: var(--text-dim); font-style: italic; }
 
 .layout {
   display: grid;
@@ -78,6 +80,15 @@ body {
   gap: 8px;
   margin-top: 10px;
   flex-wrap: wrap;
+}
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
 }
 .btn {
   background: #3a3733;
@@ -322,6 +333,28 @@ body {
   border-radius: 6px;
   padding: 14px;
 }
+.game-summary {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.summary-col {
+  flex: 1;
+  text-align: center;
+  background: var(--panel-bg-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px 6px;
+}
+.summary-label { font-size: 11px; color: var(--text-dim); margin-bottom: 4px; }
+.summary-accuracy { font-size: 20px; font-weight: 700; color: var(--text); }
+.summary-elo { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+.summary-caveat {
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  margin: 0 0 14px;
+}
 .stats-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .stats-table th {
   text-align: center;
@@ -343,17 +376,22 @@ body {
   justify-content: center;
   text-align: left;
 }
-.dot {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
+.badge-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   flex-shrink: 0;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .legend { list-style: none; margin: 0; padding: 0; font-size: 12px; color: var(--text-dim); }
-.legend li { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
-.legend .dot { width: 12px; height: 12px; }
+.legend li { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
 
 .footer-note {
   text-align: center;

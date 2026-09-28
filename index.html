@@ -3,14 +3,17 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Chess Review Prototype — Book / Correct / Good / Brilliant</title>
+<title>Chess Game Review</title>
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
 <header class="topbar">
-  <h1>Chess Review <span class="subtitle">prototype</span></h1>
-  <div class="engine-status" id="engineStatus">Engine: not loaded</div>
+  <h1>Chess Game Review</h1>
+  <div class="header-status">
+    <div class="engine-status" id="engineStatus">Engine: not loaded</div>
+    <div class="opening-status" id="openingStatus"></div>
+  </div>
 </header>
 
 <main class="layout">
@@ -29,6 +32,10 @@
     <div class="button-row">
       <button id="exportPgnBtn" class="btn" disabled>Export annotated PGN</button>
     </div>
+    <label class="checkbox-row">
+      <input type="checkbox" id="includeCandidatesCheckbox" />
+      Include candidate moves + win% in export (for debugging)
+    </label>
 
     <div class="progress-row" id="progressRow" hidden>
       <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
@@ -119,6 +126,22 @@
 
   <!-- RIGHT: stats -->
   <aside class="stats-area">
+    <div id="gameSummary" class="game-summary" hidden>
+      <div class="summary-col">
+        <div class="summary-label">White</div>
+        <div class="summary-accuracy" id="summaryAccuracyW">—</div>
+        <div class="summary-elo" id="summaryEloW">—</div>
+      </div>
+      <div class="summary-col">
+        <div class="summary-label">Black</div>
+        <div class="summary-accuracy" id="summaryAccuracyB">—</div>
+        <div class="summary-elo" id="summaryEloB">—</div>
+      </div>
+    </div>
+    <p class="summary-caveat" id="summaryCaveat" hidden>
+      Accuracy uses Lichess's published win%-based formula. The rating estimate next to it is a rough, for-fun ballpark from accuracy alone — no validated public formula for this exists anywhere (Lichess and chess.com both keep theirs undisclosed), and it ignores opponent strength entirely, so treat it as illustrative only, not a real rating.
+    </p>
+
     <h2 class="section-heading">Move stats</h2>
     <table class="stats-table" id="statsTable">
       <thead>

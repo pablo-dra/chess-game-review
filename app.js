@@ -19,6 +19,7 @@ const progressRow = el("progressRow");
 const progressFill = el("progressFill");
 const progressLabel = el("progressLabel");
 const engineStatus = el("engineStatus");
+const openingStatus = el("openingStatus");
 const boardEl = el("board");
 const evalBarWhite = el("evalBarWhite");
 const evalBarLabel = el("evalBarLabel");
@@ -169,23 +170,34 @@ function materialRatioFromFen(fen) {
   return total / STARTING_MATERIAL;
 }
 
-// ---------- Opening explorer (Book detection) ----------// Uses lichess's public Masters explorer. If the network call fails
-// (offline, blocked), we fall back to a simple "first few low-eval
-// plies" heuristic and say so in the engine status line.
-let explorerAvailable = true;
+// ---------- Opening explorer (Book detection) ----------
+// Uses lichess's public Masters explorer. Each position is checked
+// independently: a single failed request only falls back to the "first
+// N plies" heuristic for THAT move, it does not disable the explorer
+// for the rest of the game (a transient blip or one rate-limited
+// request used to poison book detection for the whole rest of the
+// game, which is why it always looked like it stopped at the same
+// fixed ply - it wasn't really consulting live data past that point).
+// Every failure is logged to the console with its actual cause so it's
+// possible to tell a CORS/network problem from a rate limit from a
+// genuinely-ended opening.
+let lastKnownOpening = null; // {eco, name} from the most recent successful match
 
 async function isBookPosition(fen, minGames) {
-  if (!explorerAvailable) return null; // null = "unknown, use fallback"
   try {
     const url = `https://explorer.lichess.org/masters?fen=${encodeURIComponent(fen)}&topGames=0&moves=0`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error("explorer HTTP " + res.status);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     const total = (data.white || 0) + (data.draws || 0) + (data.black || 0);
+    if (data.opening) lastKnownOpening = data.opening; // {eco, name}
     return total >= minGames;
   } catch (e) {
-    explorerAvailable = false;
-    return null;
+    console.warn("Opening explorer request failed, using fallback heuristic for this move:", e.message || e);
+    return null; // null = "unknown, use fallback for this move only"
   }
 }
 
@@ -264,7 +276,7 @@ async function runAnalysis() {
 
   setBusy(true);
   progressRow.hidden = false;
-  explorerAvailable = true;
+  lastKnownOpening = null;
 
   const settings = readSettings();
 
@@ -284,7 +296,8 @@ async function runAnalysis() {
     return;
   }
 
-  let stillInBook = true;
+  let stillInBook = true; // false once an explicit "not enough games" response confirms theory ended
+  const MAX_BOOK_PLIES = 40; // safety cap so a persistently unreachable API doesn't add a timeout per move all game long
 
   for (let i = 0; i < plies.length; i++) {
     if (cancelRequested) break;
@@ -300,16 +313,17 @@ async function runAnalysis() {
     const isForced = new Chess(ply.fenBefore).moves().length === 1;
 
     let isBook = false;
-    if (!isForced && stillInBook) {
+    if (!isForced && stillInBook && i < MAX_BOOK_PLIES) {
       const bookResult = await isBookPosition(ply.fenBefore, settings.minBookGames);
       if (bookResult === true) {
         isBook = true;
       } else if (bookResult === false) {
-        stillInBook = false;
+        stillInBook = false; // confirmed by a real response: theory ends here
       } else {
-        // explorer unreachable: fall back to "first 6 plies count as book"
+        // This specific request failed (see console for why) - fall
+        // back to a conservative guess for THIS move only. The next
+        // move gets its own fresh attempt at the live data.
         isBook = i < 6;
-        if (i >= 6) stillInBook = false;
       }
     }
 
@@ -370,9 +384,16 @@ async function runAnalysis() {
     Classification.markTopMoveChains(classified, { chainLength: settings.topChainLength, minGain: settings.topChainGain, opponentGapRatio: settings.opponentGapRatio });
     renderMoveList();
     renderStats();
+    renderGameSummary();
     progressFill.style.width = "100%";
     progressLabel.textContent = `Done: ${plies.length} / ${plies.length}`;
     el("exportPgnBtn").disabled = false;
+
+    if (lastKnownOpening) {
+      openingStatus.textContent = `Opening: ${lastKnownOpening.name} (${lastKnownOpening.eco})`;
+    } else {
+      openingStatus.textContent = "Opening: unmatched or explorer unreachable (see console) — used fallback heuristic";
+    }
   }
 
   engine.stopAndTerminate();
@@ -410,8 +431,11 @@ function resetAll() {
   updateEvalBar(null);
   renderCandidates(-1);
   el("exportPgnBtn").disabled = true;
+  el("gameSummary").hidden = true;
+  el("summaryCaveat").hidden = true;
   engineStatus.textContent = "Engine: not loaded";
   engineStatus.className = "engine-status";
+  openingStatus.textContent = "";
 }
 
 // ---------- Rendering: board ----------
@@ -636,6 +660,47 @@ function renderCandidates(index) {
 // ---------- Rendering: stats ----------
 const STAT_ORDER = ["BRILLIANT", "GOOD", "BEST", "CORRECT", "BOOK", "FORCED", "MISTAKE", "BLUNDER"];
 
+// Small badge icon shared by the stats table and the legend - the same
+// circular, colored symbol used on the board, just inline instead of
+// overlaid on a square.
+function makeBadgeIcon(info) {
+  const badge = document.createElement("span");
+  badge.className = "badge-icon";
+  badge.style.background = info.color;
+  badge.textContent = info.symbol;
+  return badge;
+}
+
+// Per-color accuracy % (Lichess's own formula) and a rough, clearly
+// caveated rating estimate from that accuracy alone.
+function renderGameSummary() {
+  const accuracies = { w: [], b: [] };
+  classified.forEach(c => {
+    if (!c) return;
+    accuracies[c.color].push(Classification.moveAccuracy(c.dropPoints || 0));
+  });
+
+  const accW = Classification.gameAccuracy(accuracies.w);
+  const accB = Classification.gameAccuracy(accuracies.b);
+
+  const summaryEl = el("gameSummary");
+  const caveatEl = el("summaryCaveat");
+  if (accW === null && accB === null) {
+    summaryEl.hidden = true;
+    caveatEl.hidden = true;
+    return;
+  }
+  summaryEl.hidden = false;
+  caveatEl.hidden = false;
+
+  el("summaryAccuracyW").textContent = accW !== null ? `${accW.toFixed(1)}%` : "—";
+  el("summaryAccuracyB").textContent = accB !== null ? `${accB.toFixed(1)}%` : "—";
+  const eloW = Classification.estimateRatingFromAccuracy(accW);
+  const eloB = Classification.estimateRatingFromAccuracy(accB);
+  el("summaryEloW").textContent = eloW !== null ? `~${eloW} est.` : "—";
+  el("summaryEloB").textContent = eloB !== null ? `~${eloB} est.` : "—";
+}
+
 function renderStats() {
   const counts = {};
   STAT_ORDER.forEach(k => counts[k] = { w: 0, b: 0 });
@@ -654,11 +719,8 @@ function renderStats() {
 
     const tdLabel = document.createElement("td");
     tdLabel.className = "label";
-    const dot = document.createElement("span");
-    dot.className = "dot";
-    dot.style.background = info.color;
-    tdLabel.appendChild(dot);
-    tdLabel.appendChild(document.createTextNode(`${info.symbol} ${info.name}`));
+    tdLabel.appendChild(makeBadgeIcon(info));
+    tdLabel.appendChild(document.createTextNode(info.name));
 
     const tdBlack = document.createElement("td");
     tdBlack.textContent = counts[key].b;
@@ -675,11 +737,8 @@ function renderLegend() {
   STAT_ORDER.forEach(key => {
     const info = Classification.LABELS[key];
     const li = document.createElement("li");
-    const dot = document.createElement("span");
-    dot.className = "dot";
-    dot.style.background = info.color;
-    li.appendChild(dot);
-    li.appendChild(document.createTextNode(`${info.symbol}  ${info.name}`));
+    li.appendChild(makeBadgeIcon(info));
+    li.appendChild(document.createTextNode(info.name));
     legendList.appendChild(li);
   });
 }
@@ -689,17 +748,30 @@ function renderLegend() {
 // any compliant PGN parser simply ignores if it doesn't care about it -
 // so the exported file stays fully re-importable elsewhere (or back into
 // this same tool) while still carrying the classification for reference.
-function buildAnnotatedPgn() {
+function buildAnnotatedPgn(includeCandidates) {
   const lines = [];
   const headers = { ...gameHeaders };
   if (!headers.Event) headers.Event = "?";
+  if (lastKnownOpening && !headers.Opening) {
+    headers.Opening = `${lastKnownOpening.name} (${lastKnownOpening.eco})`;
+  }
   Object.entries(headers).forEach(([k, v]) => lines.push(`[${k} "${v}"]`));
   lines.push("");
 
   let movetext = "";
   plies.forEach((ply, i) => {
     const cls = classified[i];
-    const tag = cls ? ` {${cls.label.symbol} ${cls.label.name}}` : "";
+    let tag = "";
+    if (cls) {
+      tag = ` {${cls.label.symbol} ${cls.label.name}`;
+      if (includeCandidates && cls.candidates && cls.candidates.length > 0) {
+        const candidateText = cls.candidates
+          .map(c => `${uciToSan(ply.fenBefore, c.moveUci)} ${c.winPercent.toFixed(1)}%`)
+          .join(", ");
+        tag += ` | candidates: ${candidateText}`;
+      }
+      tag += "}";
+    }
     if (ply.color === "w") {
       movetext += `${ply.moveNumber}. ${ply.moveSan}${tag} `;
     } else {
@@ -716,7 +788,8 @@ function exportAnnotatedPgn() {
     alert("Run an analysis first.");
     return;
   }
-  const pgnText = buildAnnotatedPgn();
+  const includeCandidates = el("includeCandidatesCheckbox").checked;
+  const pgnText = buildAnnotatedPgn(includeCandidates);
   const blob = new Blob([pgnText], { type: "application/x-chess-pgn" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
