@@ -1,62 +1,109 @@
 # Chess Game Review
 
-A small local web app that loads a PGN, runs it through Stockfish, and
-tags each move as **Book / Correct / Good / Brilliant / Mistake / Blunder**
-following the classification proposal discussed for the Lichess feature
-request. It's meant as a proof of concept to attach to the GitHub
-issue, not a production tool.
+A small web app that loads a PGN (pasted by hand, or fetched straight
+from a Lichess username's public games), runs it through Stockfish,
+and tags each move as **Book / Correct / Best / Good / Brilliant /
+Forced / Mistake / Blunder** following the classification proposal
+discussed for the Lichess feature request. It's meant as a proof of
+concept to attach to the GitHub issue, not a production tool. Runs
+either locally or hosted for free on GitHub Pages — see below.
 
 ## 1. Setup (one-time)
 
-You need two things that aren't bundled in this folder, for licensing
-and file-size reasons: the Stockfish engine itself, and a local static
-server (browsers block Worker + fetch from a plain double-clicked
-`file://` page).
+### 1a. Get the engine — and keep it self-hosted
 
-### 1a. Get the engine
+The `engine/` folder needs **`stockfish-18-lite-single.js`** and
+**`stockfish-18-lite-single.wasm`**, downloaded from the official
+releases page:
+https://github.com/nmrugg/stockfish.js/releases/tag/v18.0.0
+(the "lite single-threaded" flavor — no special CORS/COOP headers
+needed, and still far stronger than any human). Put both files inside
+`engine/`, next to this README, so you end up with:
 
-1. Download **`stockfish-18-lite-single.js`** and **`stockfish-18-lite-single.wasm`**
-   from the official releases page:
-   https://github.com/nmrugg/stockfish.js/releases/tag/v18.0.0
-   (the "lite single-threaded" flavor — no special CORS/COOP headers
-   needed, and still far stronger than any human).
-2. Put both files inside the `engine/` folder here, next to this
-   README, so you end up with:
-   ```
-   chess-review/
-     engine/
-       stockfish-18-lite-single.js
-       stockfish-18-lite-single.wasm
-     index.html
-     style.css
-     app.js
-     classification.js
-   ```
-   If you use a different Stockfish build or filename, update
-   `ENGINE_PATH` at the top of `app.js` to match.
+```
+chess-review/
+  engine/
+    stockfish-18-lite-single.js
+    stockfish-18-lite-single.wasm
+  index.html
+  style.css
+  app.js
+  classification.js
+```
 
-### 1b. Serve the folder over http
+If you use a different Stockfish build or filename, update
+`ENGINE_PATH` at the top of `app.js` to match.
 
-Any static server works. From this folder:
+**Keep these files committed in the repo itself rather than loaded
+from an external CDN.** This isn't just a licensing/size call — it's
+the more *reliable* option specifically because of how `engine` gets
+loaded as a Web Worker:
+
+- GitHub's own release-asset CDN doesn't send CORS headers at all, so
+  a browser refuses to load `.wasm` or create a Worker from those
+  URLs directly — confirmed this while checking options, not a
+  guess. A CORS-friendly third-party mirror exists on Hugging Face
+  specifically for this use case, but using it would still mean
+  routing the engine's own Worker creation through a cross-origin URL,
+  which browsers are fussier about than a plain CORS-enabled `fetch`
+  — it can require fetching the script as text and instantiating the
+  Worker from a Blob URL, and even then the engine's own internal
+  fetch of its `.wasm` companion file (a relative path) isn't
+  guaranteed to resolve correctly once it's running from a Blob URL
+  rather than a real directory.
+- Self-hosting sidesteps all of that: same origin as the page, so no
+  CORS questions, no cross-origin Worker restrictions, and the
+  relative path between the `.js` loader and its `.wasm` file always
+  resolves correctly. GitHub (and GitHub Pages) has no problem serving
+  a ~7 MB binary file as a normal static asset.
+
+### 1b. Running it
+
+**Locally, while developing:** any static server works, since Worker
+creation and the opening-book lookup both need a real origin (opening
+`index.html` directly as a `file://` won't work). From this folder:
 
 ```bash
 python3 -m http.server 8000
 ```
 
 or, in VS Code, right-click `index.html` → "Open with Live Server" (if
-you have that extension installed). Then open
-`http://localhost:8000` in your browser. Opening `index.html` directly
-as a file (`file://...`) will NOT work — Worker creation and the
-opening-book lookup both require a real origin.
+you have that extension installed) — then open `http://localhost:8000`.
+
+**Hosted for free, so you can hand someone a link — GitHub Pages:**
+
+1. Push this folder (with the engine files included, per 1a) to a
+   GitHub repo.
+2. Add an empty file named **`.nojekyll`** at the repo root (included
+   in this folder already — make sure it actually gets committed and
+   pushed, since some Git clients hide dotfiles by default). This
+   turns off GitHub's default Jekyll processing, which otherwise can
+   mishandle folders starting with an underscore and isn't needed for
+   a plain static site like this one.
+3. In the repo's **Settings → Pages**, pick the branch and folder to
+   serve (root of `main`, typically) and save.
+4. GitHub gives you a URL like `https://your-username.github.io/your-repo/`
+   — open that, and everything (engine included) loads from the same
+   origin automatically, no extra configuration needed. Every path in
+   `index.html` and `app.js` is already relative, so it works the same
+   whether it's served from the repo root or from that `/your-repo/`
+   subpath.
 
 ## 2. Using it
 
-1. Paste a PGN into the text box.
+1. Get a game in, one of two ways:
+   - Type a **Lichess username** and click **Load games** — this calls
+     Lichess's public games API (`/api/games/user/{username}`, no
+     login needed, only works for public games) and lists recent
+     games with opponent, result and opening. Click one to drop its
+     PGN straight into the text box below.
+   - Or just paste a PGN directly into the text box yourself.
 2. Click **Analyze**. The gear icon lets you change search depth,
    MultiPV width, and the Mistake/Blunder thresholds before running.
-3. Click through the move list or use the ◀ ▶ buttons to step through
-   the game; the badge on the last-moved square and the stats table on
-   the right update per move.
+3. Click through the move list or use the ◀ ▶ buttons (or your
+   keyboard's left/right arrows) to step through the game; the badge
+   on the last-moved square and the stats table on the right update
+   per move.
 
 Analysis runs entirely in your browser — nothing is sent anywhere
 except the opening-book lookups to Lichess's public Masters explorer
@@ -249,6 +296,13 @@ than hiding:
   being ranked among themselves (a mate-in-1 and a mate-in-6 both read
   as ~100%). This never matters for Book/Correct/Good, only in the
   rare case where multiple candidates are all forced mates.
+- The "Load games" username lookup calls Lichess's public games API
+  directly from the browser, same as the opening-book check — if it
+  fails, the error (including an HTTP 429 if you hit a rate limit from
+  loading many usernames in a short burst) is logged to the console
+  rather than guessed at silently. Games still in progress have no
+  PGN yet; clicking one of those shows an alert instead of loading
+  nothing silently.
 - The opening-book check calls Lichess's public Masters explorer for
   every position while still in book; each request is independent (a
   single failed request only falls back to a heuristic for that one

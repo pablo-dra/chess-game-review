@@ -20,7 +20,16 @@
 
   <!-- LEFT: controls -->
   <section class="controls">
-    <label for="pgnInput">Paste PGN</label>
+    <label for="lichessUsernameInput">Load from a Lichess username (public games)</label>
+    <div class="lichess-fetch-row">
+      <input type="text" id="lichessUsernameInput" placeholder="username" />
+      <input type="number" id="lichessMaxInput" min="1" max="50" value="20" title="How many recent games to list" />
+      <button id="lichessLoadBtn" class="btn btn-small">Load games</button>
+    </div>
+    <ul id="lichessGamesList" class="game-list"></ul>
+
+    <h2 class="section-heading">Or paste PGN</h2>
+    <label for="pgnInput" class="visually-hidden">Paste PGN</label>
     <textarea id="pgnInput" rows="8" placeholder="1. e4 e5 2. Nf3 Nc6 3. Bb5 ..."></textarea>
 
     <div class="button-row">

@@ -3,8 +3,10 @@
  * Wires together: chess.js (rules/PGN) + a Stockfish Worker (MultiPV eval)
  * + classification.js (Book/Correct/Good/Brilliant/Mistake/Blunder) + the DOM.
  *
- * See README.md for why this needs to run from a local server (not
- * double-clicked as a file://) and where to put the engine file.
+ * See README.md for why this needs to run from a real origin (local
+ * server or GitHub Pages, not a double-clicked file://) and why the
+ * engine files in engine/ should stay self-hosted rather than loaded
+ * from an external CDN.
  */
 
 // ---------- DOM ----------
@@ -31,6 +33,10 @@ const filesLabel = el("filesLabel");
 const ranksLabel = el("ranksLabel");
 const candidatesList = el("candidatesList");
 const candidatesTitle = el("candidatesTitle");
+const lichessUsernameInput = el("lichessUsernameInput");
+const lichessMaxInput = el("lichessMaxInput");
+const lichessLoadBtn = el("lichessLoadBtn");
+const lichessGamesList = el("lichessGamesList");
 
 const PIECE_GLYPHS = {
   p: "\u265F", n: "\u265E", b: "\u265D", r: "\u265C", q: "\u265B", k: "\u265A",
@@ -225,6 +231,102 @@ function readSettings() {
     opponentGapRatio: (parseInt(el("opponentGapRatioInput").value, 10) || 30) / 100,
     minBookGames: 50,
   };
+}
+
+// ---------- Loading games from a Lichess username ----------
+// Public API, no login needed: https://lichess.org/api#tag/Games/operation/apiGamesUser
+// pgnInJson=true means each line already carries the full PGN text, so
+// clicking a game in the list needs no second request.
+async function loadLichessGames() {
+  const username = lichessUsernameInput.value.trim();
+  if (!username) {
+    alert("Enter a Lichess username first.");
+    return;
+  }
+  const max = parseInt(lichessMaxInput.value, 10) || 20;
+
+  lichessGamesList.innerHTML = "";
+  const loadingLi = document.createElement("li");
+  loadingLi.className = "game-list-note";
+  loadingLi.textContent = "Loading...";
+  lichessGamesList.appendChild(loadingLi);
+  lichessLoadBtn.disabled = true;
+
+  try {
+    const url = `https://lichess.org/api/games/user/${encodeURIComponent(username)}?max=${max}&pgnInJson=true&opening=true`;
+    const res = await fetch(url, { headers: { Accept: "application/x-ndjson" } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await res.text();
+    const games = text.trim().length
+      ? text.trim().split("\n").map(line => JSON.parse(line))
+      : [];
+    renderLichessGamesList(games, username);
+  } catch (e) {
+    console.warn("Failed to load games from Lichess:", e.message || e);
+    lichessGamesList.innerHTML = "";
+    const errLi = document.createElement("li");
+    errLi.className = "game-list-note";
+    errLi.textContent = `Couldn't load games (see console for details): ${e.message || e}`;
+    lichessGamesList.appendChild(errLi);
+  } finally {
+    lichessLoadBtn.disabled = false;
+  }
+}
+
+function renderLichessGamesList(games, username) {
+  lichessGamesList.innerHTML = "";
+  if (games.length === 0) {
+    const li = document.createElement("li");
+    li.className = "game-list-note";
+    li.textContent = "No games found for that username.";
+    lichessGamesList.appendChild(li);
+    return;
+  }
+
+  const usernameLower = username.toLowerCase();
+  games.forEach(g => {
+    const whiteName = g.players?.white?.user?.name || "Anonymous";
+    const blackName = g.players?.black?.user?.name || "Anonymous";
+    const isUserWhite = whiteName.toLowerCase() === usernameLower;
+    const opponent = isUserWhite ? blackName : whiteName;
+
+    let resultLabel;
+    if (!g.winner) resultLabel = "Draw";
+    else if ((g.winner === "white" && isUserWhite) || (g.winner === "black" && !isUserWhite)) resultLabel = "Win";
+    else resultLabel = "Loss";
+
+    const date = g.createdAt ? new Date(g.createdAt).toLocaleDateString() : "";
+    const speed = g.speed || g.perf || "";
+    const openingName = g.opening ? g.opening.name : "";
+
+    const li = document.createElement("li");
+    li.className = "game-list-row";
+
+    const resultSpan = document.createElement("span");
+    resultSpan.className = `game-result game-result-${resultLabel.toLowerCase()}`;
+    resultSpan.textContent = resultLabel;
+
+    const infoSpan = document.createElement("span");
+    infoSpan.className = "game-info";
+    infoSpan.textContent = `vs ${opponent} \u00B7 ${speed} \u00B7 ${date}${openingName ? " \u00B7 " + openingName : ""}`;
+    infoSpan.title = infoSpan.textContent; // full text on hover, in case it's truncated
+
+    li.appendChild(resultSpan);
+    li.appendChild(infoSpan);
+
+    li.addEventListener("click", () => {
+      if (!g.pgn) {
+        alert("This game has no PGN available (likely still in progress).");
+        return;
+      }
+      pgnInput.value = g.pgn;
+      document.querySelectorAll(".game-list-row.selected").forEach(r => r.classList.remove("selected"));
+      li.classList.add("selected");
+      pgnInput.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+
+    lichessGamesList.appendChild(li);
+  });
 }
 
 // ---------- PGN -> ply list ----------
@@ -802,6 +904,10 @@ function exportAnnotatedPgn() {
 }
 
 // ---------- Wire up events ----------
+lichessLoadBtn.addEventListener("click", loadLichessGames);
+lichessUsernameInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") loadLichessGames();
+});
 analyzeBtn.addEventListener("click", runAnalysis);
 cancelBtn.addEventListener("click", cancelAnalysis);
 resetBtn.addEventListener("click", resetAll);
