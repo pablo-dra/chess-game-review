@@ -58,6 +58,28 @@ body {
   border-radius: 6px;
   padding: 14px;
 }
+.tab-bar {
+  display: flex;
+  gap: 4px;
+  margin: -14px -14px 14px;
+  padding: 6px 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.tab-btn {
+  flex: 1;
+  background: transparent;
+  color: var(--text-dim);
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 9px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
 .controls label {
   display: block;
   font-size: 13px;
@@ -246,7 +268,7 @@ body {
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 260px;
+  max-height: 560px;
   overflow-y: auto;
   font-size: 13px;
 }
@@ -325,17 +347,41 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 42px;
   user-select: none;
 }
 .square.light { background: var(--board-light); }
 .square.dark { background: var(--board-dark); }
+
+/*
+ * Piece sprite (cburnett, by Colin M. L. Burnett, via Wikimedia Commons:
+ * https://commons.wikimedia.org/wiki/File:Chess_Pieces_Sprite.svg - see
+ * README.md for the download step and attribution). The sprite is
+ * 270x90px: a 6-column x 2-row grid, 45px per cell. Columns left to
+ * right: King, Queen, Bishop, Knight, Rook, Pawn. Row 0 (top) = white
+ * pieces, row 1 (bottom) = black pieces.
+ *
+ * If a piece looks wrong once this is deployed, it's a one-line fix:
+ * swap the background-position-y values below (white <-> black) if
+ * colors are reversed, or re-check the background-position-x column
+ * order against the actual file if a shape looks wrong.
+ */
 .square .piece {
-  color: #111;
+  width: 100%;
+  height: 100%;
+  background-image: url("assets/cburnett-sprite.svg");
+  background-repeat: no-repeat;
+  background-size: 600% 200%;
   filter: drop-shadow(0 1px 1px rgba(0,0,0,.35));
 }
-.square .piece.white-piece { color: #fbfbfa; -webkit-text-stroke: 1px #4a3a2a; }
-.square .piece.black-piece { color: #1c1a17; -webkit-text-stroke: 0.5px #efe6d8; }
+.piece-white { background-position-y: 0%; }
+.piece-black { background-position-y: 100%; }
+.piece-k { background-position-x: 0%; }
+.piece-q { background-position-x: 20%; }
+.piece-b { background-position-x: 40%; }
+.piece-n { background-position-x: 60%; }
+.piece-r { background-position-x: 80%; }
+.piece-p { background-position-x: 100%; }
+
 .square.last-from { box-shadow: inset 0 0 0 3px rgba(255, 215, 0, 0.55); }
 .square.last-to { box-shadow: inset 0 0 0 3px rgba(255, 215, 0, 0.85); }
 

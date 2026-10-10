@@ -2,8 +2,8 @@
 
 A small web app that loads a PGN (pasted by hand, or fetched straight
 from a Lichess username's public games), runs it through Stockfish,
-and tags each move as **Book / Correct / Best / Good / Brilliant /
-Forced / Mistake / Blunder** following the classification proposal
+and tags each move as **Book / Forced / Correct / Solid / Good /
+Brilliant / Mistake / Blunder** following the classification proposal
 discussed for the Lichess feature request. It's meant as a proof of
 concept to attach to the GitHub issue, not a production tool. Runs
 either locally or hosted for free on GitHub Pages — see below.
@@ -57,7 +57,25 @@ loaded as a Web Worker:
   resolves correctly. GitHub (and GitHub Pages) has no problem serving
   a ~7 MB binary file as a normal static asset.
 
-### 1b. Running it
+### 1b. Get the piece sprite
+
+The board renders pieces with the **cburnett** set (by Colin M. L.
+Burnett), via a single sprite image rather than individual files.
+Download it from Wikimedia Commons —
+https://commons.wikimedia.org/wiki/File:Chess_Pieces_Sprite.svg —
+and save it as `assets/cburnett-sprite.svg`, next to this README (a
+placeholder `assets/README.md` with the same instructions is already
+in the folder). Same reasoning as the engine: self-hosted, not
+hotlinked, so there's no CORS/origin question at all once it's
+committed.
+
+The sprite is a 270×90px, 6-column × 2-row grid (45px per cell):
+columns left to right are King, Queen, Bishop, Knight, Rook, Pawn; the
+top row is the white pieces, the bottom row is black. If a piece looks
+wrong once deployed, it's a one-line CSS fix — see the comment above
+`.square .piece` in `style.css` for exactly which values to swap.
+
+### 1c. Running it
 
 **Locally, while developing:** any static server works, since Worker
 creation and the opening-book lookup both need a real origin (opening
@@ -72,8 +90,8 @@ you have that extension installed) — then open `http://localhost:8000`.
 
 **Hosted for free, so you can hand someone a link — GitHub Pages:**
 
-1. Push this folder (with the engine files included, per 1a) to a
-   GitHub repo.
+1. Push this folder (with the engine files from 1a and the piece
+   sprite from 1b included) to a GitHub repo.
 2. Add an empty file named **`.nojekyll`** at the repo root (included
    in this folder already — make sure it actually gets committed and
    pushed, since some Git clients hide dotfiles by default). This
@@ -91,7 +109,12 @@ you have that extension installed) — then open `http://localhost:8000`.
 
 ## 2. Using it
 
-1. Get a game in, one of two ways:
+The left column has two tabs: **Set** (loading a game and running the
+analysis) and **Moves** (the move list once it's ready) — kept
+separate so the move list has its own dedicated space instead of
+sitting squeezed below everything else.
+
+1. On the **Set** tab, get a game in, one of two ways:
    - Type a **Lichess username** and click **Load games** — this calls
      Lichess's public games API (`/api/games/user/{username}`, no
      login needed, only works for public games) and lists recent
@@ -100,10 +123,12 @@ you have that extension installed) — then open `http://localhost:8000`.
    - Or just paste a PGN directly into the text box yourself.
 2. Click **Analyze**. The gear icon lets you change search depth,
    MultiPV width, and the Mistake/Blunder thresholds before running.
-3. Click through the move list or use the ◀ ▶ buttons (or your
+   Once analysis finishes, the view switches to the **Moves** tab
+   automatically.
+3. Click through the move list, or use the ◀ ▶ buttons (or your
    keyboard's left/right arrows) to step through the game; the badge
    on the last-moved square and the stats table on the right update
-   per move.
+   per move. **Reset** switches back to the **Set** tab.
 
 Analysis runs entirely in your browser — nothing is sent anywhere
 except the opening-book lookups to Lichess's public Masters explorer
@@ -111,122 +136,86 @@ except the opening-book lookups to Lichess's public Masters explorer
 
 ## 3. How the classification works
 
-This mirrors the proposal, refined during discussion:
+This mirrors the proposal, simplified and refined over several rounds
+of testing against real games:
 
 - **Book** — while the position matches Lichess's Masters opening
-  explorer with at least 50 games behind it (`explorer.lichess.org`,
-  called live from your browser). If that call fails (offline, etc.)
-  it falls back to a rough heuristic of "the first 6 plies" and says
-  so in the engine status line.
-- **Best / Correct / Good** — for every non-book position, the engine
-  reports the top ~5 candidate moves (MultiPV) at a fixed depth
-  (default 18, matching what Lichess's own server analysis already
-  uses). Each candidate's centipawn score is converted to a win% using
-  the same curve Lichess uses for its Accuracy stat. We take the
-  **median** win% across those candidates: any move sitting more than
-  a small gap above that median counts as part of the "top cluster". A
-  move only becomes **Good** if that cluster has 1-2 moves **and**
-  playing it is a genuine gain (by default, 8+ win% points) over where
-  this same player already stood two of their own moves ago — i.e.
-  before the opponent's intervening move. This is what keeps an
-  obvious, forced-looking retreat (e.g. a hanging knight with only one
-  or two safe squares) from scoring the same as a real find: moving
-  the knight back to safety doesn't improve on where White already
-  was, it just avoids losing what was already fine, so it's scored
-  **Correct** instead (a scarce move that failed the gain check always
-  lands here, never in Best — see below for why).
+  explorer with at least 50 games behind it (`explorer.lichess.ovh`,
+  called live from your browser — note the `.ovh`, confirmed against
+  the opening explorer's own official source repo; an earlier version
+  of this file pointed at `.org` by mistake, which is why book
+  detection used to always fall back to the heuristic below). If the
+  call fails (offline, rate-limited, etc.) it falls back to a rough
+  heuristic of "the first 6 plies" for that move only, and says so in
+  the opening status line and the browser console.
+- **Forced** — a position with exactly one legal move (e.g. the only
+  way out of check) is labeled Forced and skipped entirely: no engine
+  analysis runs on it, and it's never eligible to be Good, Solid, or
+  to start/extend a Brilliant chain, since there was no decision to
+  judge either way.
+- **Mistake / Blunder** — the classic win%-drop-from-the-best-move
+  check, using the two thresholds in the settings panel (defaults: 10
+  and 20 points).
+- **Correct / Solid / Good** — for every other move, the engine
+  reports the top ~5 candidates (MultiPV) at a fixed depth (default
+  18, matching what Lichess's own server analysis already uses), each
+  converted to win% with the same curve Lichess uses for its Accuracy
+  stat. The **mean** of those candidates is the single reference point
+  used for everything below (deliberately one consistent statistic
+  rather than mixing median and mean, which an earlier version did):
+  - If 2 or fewer candidates sit clearly above that mean — a gap of
+    5+ win% points by default — the position is a **scarce / critical
+    moment**: e.g. candidates at win% `18, 35, 45, 60, 85` (mean
+    ≈48.6) only `60` and `85` clear the gap, so the cluster is just
+    those two. Playing one of them is **Good**, but only if it's also
+    a genuine gain (8+ win% points by default) over where this same
+    player already stood two of their own moves ago — i.e. before the
+    opponent's intervening move. That gain check is what keeps an
+    obvious, forced-looking retreat (a hanging knight with only one or
+    two safe squares) from scoring the same as a real find: moving the
+    knight back to safety doesn't improve on where White already was,
+    it just avoids losing what was already fine, so it stays
+    **Correct** instead. A scarce move that misses the scarce cluster
+    entirely is Correct too.
+  - If 3 or more candidates are close together — a standard,
+    unremarkable position, e.g. win% `40, 43, 44, 45, 48` (mean 44,
+    nothing clears the gap) — there's no standout to chase, so the
+    split is simpler: **Solid** for a move at or above that mean (e.g.
+    playing 45 or 48), **Correct** for one below it (e.g. 40 or 43).
+  - A move that isn't among the analyzed candidates at all is always
+    **Correct** (never Good or Solid), regardless of what its own
+    searched evaluation happens to be — it wasn't one of the position's
+    standout or above-average options as far as the analysis goes.
+- **Brilliant** — not a per-move check at all: a single retrospective
+  pass over the finished game. The first **Good** move opens a window
+  of that same player's own subsequent moves. If every one of them is
+  also **Good or Solid**, *and* the opponent's own moves across that
+  same span were never a Mistake or Blunder (otherwise it's their
+  error being converted, not a demonstrated combo), the origin move is
+  upgraded to Brilliant — the rest of the chain keeps whatever label
+  it already had. Forced and Book moves inside the span don't count
+  toward it and don't break it either, since neither involves a real
+  choice. No material-sacrifice detection is needed for this — a
+  Tal-style piece left "hanging" while pushing a different plan shows
+  up naturally through the same Good/Solid chain.
 
-  If the cluster has 3+ moves — i.e. no scarce standout, plenty of
-  roughly-equal options — the median-based cluster check doesn't have
-  anything more useful to say, so within that group we fall back to a
-  much simpler split: the plain **mean** of the candidates' win%. A
-  move above that mean is **Best**; at or below it, it's **Correct**.
-  Concretely: candidates at 51.95/51.65/50.4/50.1/49% (mean ≈50.62%) —
-  playing 51.95% or 51.65% earns Best, playing any of the other three
-  stays Correct. This only applies to the "everyone's about equal"
-  case; a scarce (≤2) move that merely held its ground never gets
-  promoted to Best through this path, since the point of that
-  distinction is specifically to flag "you found a genuinely better
-  option among many good ones", not to soften the Good/Correct gain
-  requirement discussed above.
-- **Brilliant** — now has **two independent, additive** paths, either
-  of which is enough:
-  1. *Scarcity chain* (the original idea): the first "Good" move opens
-     a window of that player's own following moves. The window length
-     is configurable separately for the opening and the endgame (both
-     defaulting to 2 of the player's own moves), and interpolated
-     smoothly between the two based on **how much material is left on
-     the board**, not the move number — a queen-less middlegame at
-     move 10 behaves like an endgame here, and a slow, piece-heavy
-     position at move 20 still behaves like the opening. Concretely:
-     material ≥80% of the starting total → the "early" length; ≤13%
-     (roughly a queen or a minor piece plus a couple of pawns, per the
-     "late game" description discussed) → the "late" length; linearly
-     interpolated in between. If every one of the player's moves in
-     that window keeps landing in a scarce top cluster (≤2) without
-     the advantage collapsing, **and the opponent was putting up
-     reasonable resistance throughout the same span** (see below), the
-     origin move is upgraded to Brilliant.
-  2. *Top-move chain* (added after testing against real games): reward
-     simply finding the engine's actual #1 move several times in a row
-     for the same player — even when the top cluster wasn't scarce at
-     each individual step — as long as doing so builds up a real
-     advantage over the span, and, same as path 1, the opponent held
-     up their end. Default: 2 consecutive own moves, 10+ win% points
-     gained overall. Only the *first* move of a qualifying run gets
-     upgraded to Brilliant; the rest keep whatever label they already
-     had (usually Correct).
+  The window length is configurable separately for the opening and
+  the endgame (defaults: 2 of the player's own moves early, 4 late —
+  i.e. 2 full moves vs. 4 full moves), interpolated smoothly between
+  the two rather than switching abruptly at a cutoff. The phase that
+  drives the interpolation is read from **two signals, taking
+  whichever indicates the more advanced phase**: material left on the
+  board (100-80% → early, 80-30% → mid, ≤30% → late) and the move
+  number itself (≤10 full moves → early, ≤30 → mid, beyond → late). A
+  long, slow, piece-heavy game past move 30 counts as late-game even
+  if material hasn't dropped much, and a sharp line that sheds material
+  fast counts as late-game even before move 10.
 
-  **Judging the opponent's moves** (shared by both paths, found in
-  `opponentPlayedReasonably()`): after an early version let a couple of
-  false positives through — the opponent's move looked "fine" by a
-  plain win%-drop threshold, but only because the position was so flat
-  that nothing drops much — this now runs as two sequential gates
-  against every opponent move inside the chain's span:
-  1. Their move has to be one of the engine's analyzed top-N candidates
-     at all. A move so far outside the shortlist that the engine never
-     even reported it doesn't count as resistance, no matter how small
-     its measured win% drop happens to look.
-  2. If it was one of the candidates, it also has to be one of the
-     *good* ones among that specific set. This is found by sorting that
-     position's candidates best-to-worst and cutting the "reasonable"
-     group at the first gap that's large *relative to that set's own
-     spread* (default: a drop bigger than 30% of the top-to-bottom
-     range disqualifies everything past that point). One rule handles
-     two different shapes: candidates `[9, 4, -1, -1, -1]` → only the
-     `9` passes (the very next value is already a big relative drop);
-     candidates `[4, 3.98, 3.96, 3.9, 3.9]` → `4`, `3.98` and `3.96`
-     all pass (tightly bunched together, no real gap yet), only the
-     trailing `3.9`s fail.
-
-  Either gate failing on any opponent move in the span disqualifies
-  the whole chain for that origin move. The origin player's own moves
-  in between (when the window spans more than one) are explicitly
-  skipped here — those are judged separately by each path's own
-  advantage/scarcity check, not by these opponent-facing gates.
-
-  Both paths ignore Forced and Book moves in between (they don't count
-  toward either chain, don't break one, and are exempt from the
-  opponent-quality gates above, since none of the three involve a real
-  choice under scrutiny). No material-sacrifice detection is required
-  for either path — a Tal-style piece left "hanging" while pushing a
-  different plan shows up naturally through the scarcity-chain method.
-- **Forced** — when a position has exactly one legal move (e.g. the
-  only way out of check), it's labeled Forced and skipped entirely:
-  no engine analysis is run on it, and it can never be Good or start
-  or extend either kind of Brilliant chain, since there was no real
-  decision behind it.
-- **Mistake / Blunder** — the classic win%-drop-from-best check, using
-  the two thresholds set in the settings panel (defaults: 10 and 20
-  points).
-
-All thresholds (Mistake drop, Blunder drop, Good's minimum gain, the
-two scarcity-chain lengths, the two top-move-chain settings, and the
-opponent gap ratio used by both chains' opponent-quality gate) are
-exposed in the gear-icon settings panel specifically so they're easy
-to retune while testing against real games — nothing about their
-default values is meant to be final. The 80%/13% material breakpoints
-that drive the early/late interpolation are not yet exposed as
+All thresholds (Mistake drop, Blunder drop, Good's minimum gain, and
+the two Brilliant chain lengths) are exposed in the gear-icon settings
+panel so they're easy to retune while testing against real games —
+nothing about their defaults is meant to be final. The material/move
+breakpoints that drive the phase interpolation aren't yet exposed as
 settings (they're constants inside `brilliantWindow()` in
 `classification.js`) — worth adding to the panel too if they turn out
 to need tuning.
@@ -287,15 +276,16 @@ These are simplifications made to keep a first version buildable in a
 reasonable amount of code — worth flagging in the GitHub issue rather
 than hiding:
 
-- The "median" is computed over the top ~5 MultiPV candidates, not
-  over every legal move in the position (evaluating every legal move
-  to full depth would multiply the cost far more than the ~2–3x
-  estimated in the proposal). This is a reasonable approximation in
-  practice but not identical to a true full-width median.
+- The "mean" used for both the scarcity check and the Solid/Correct
+  split is computed over the top ~5 MultiPV candidates, not over every
+  legal move in the position (evaluating every legal move to full
+  depth would multiply the cost far more than the ~2–3x estimated in
+  the proposal). This is a reasonable approximation in practice but
+  not identical to a true full-width mean.
 - Mate scores are converted to a fixed near-100%/0% win% rather than
   being ranked among themselves (a mate-in-1 and a mate-in-6 both read
-  as ~100%). This never matters for Book/Correct/Good, only in the
-  rare case where multiple candidates are all forced mates.
+  as ~100%). This never matters for Book/Correct/Good/Solid, only in
+  the rare case where multiple candidates are all forced mates.
 - The "Load games" username lookup calls Lichess's public games API
   directly from the browser, same as the opening-book check — if it
   fails, the error (including an HTTP 429 if you hit a rate limit from
@@ -323,11 +313,12 @@ than hiding:
   what happens to the loaded game's classification once you deviate
   from it — enough extra scope that it felt better left out of a first
   prototype than done halfway.
-- Pieces are Unicode chess glyphs (styled a bit, with a subtle outline)
-  rather than the actual Lichess/cburnett SVG piece set. Hot-linking
-  those SVGs from lila's GitHub repo would be easy in principle, but
-  wasn't done here to avoid a fragile external dependency in a
-  prototype; if you want them, download the `cburnett` folder from
-  https://github.com/lichess-org/lila/tree/master/public/piece/cburnett
-  and swap `placeSquare()` in `app.js` to render `<img>` tags instead
-  of the `PIECE_GLYPHS` text.
+- Pieces use the real cburnett sprite (self-hosted, see 1b), but its
+  internal grid layout (column order, which row is white) was taken
+  from the file's known dimensions and standard convention, not from
+  actually opening and inspecting the file — double-check it looks
+  right once deployed; see the CSS comment above `.square .piece` in
+  `style.css` for the one-line fix if a piece looks wrong.
+- There's no local fallback if the sprite file is missing or fails to
+  load (a 404 just renders blank squares with no piece visible, rather
+  than falling back to text glyphs or an error message).

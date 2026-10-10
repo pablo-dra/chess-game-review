@@ -38,10 +38,6 @@ const lichessMaxInput = el("lichessMaxInput");
 const lichessLoadBtn = el("lichessLoadBtn");
 const lichessGamesList = el("lichessGamesList");
 
-const PIECE_GLYPHS = {
-  p: "\u265F", n: "\u265E", b: "\u265D", r: "\u265C", q: "\u265B", k: "\u265A",
-};
-
 // ---------- Engine wrapper ----------
 // Loaded from a local file (see README.md) so there are no cross-origin
 // worker/wasm issues. Adjust the path here if you name the file differently.
@@ -191,7 +187,11 @@ let lastKnownOpening = null; // {eco, name} from the most recent successful matc
 
 async function isBookPosition(fen, minGames) {
   try {
-    const url = `https://explorer.lichess.org/masters?fen=${encodeURIComponent(fen)}&topGames=0&moves=0`;
+    // Confirmed against the official lila-openingexplorer source repo's
+    // own usage example - the real public host is .ovh, not .org (an
+    // earlier version of this file used .org, which was the actual bug
+    // behind book detection always falling back to the heuristic).
+    const url = `https://explorer.lichess.ovh/masters?fen=${encodeURIComponent(fen)}&topGames=0&moves=0`;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 4000);
     const res = await fetch(url, { signal: controller.signal });
@@ -225,10 +225,7 @@ function readSettings() {
     blunder: parseInt(el("blunderInput").value, 10) || 20,
     goodGain: parseInt(el("goodGainInput").value, 10) || 8,
     brilliantEarly: parseInt(el("brilliantEarlyInput").value, 10) || 2,
-    brilliantLate: parseInt(el("brilliantLateInput").value, 10) || 2,
-    topChainLength: parseInt(el("topChainLengthInput").value, 10) || 2,
-    topChainGain: parseInt(el("topChainGainInput").value, 10) || 10,
-    opponentGapRatio: (parseInt(el("opponentGapRatioInput").value, 10) || 30) / 100,
+    brilliantLate: parseInt(el("brilliantLateInput").value, 10) || 4,
     minBookGames: 50,
   };
 }
@@ -482,8 +479,7 @@ async function runAnalysis() {
   }
 
   if (!cancelRequested) {
-    Classification.upgradeBrilliants(classified, { early: settings.brilliantEarly, late: settings.brilliantLate }, settings.opponentGapRatio);
-    Classification.markTopMoveChains(classified, { chainLength: settings.topChainLength, minGain: settings.topChainGain, opponentGapRatio: settings.opponentGapRatio });
+    Classification.upgradeBrilliants(classified, { early: settings.brilliantEarly, late: settings.brilliantLate });
     renderMoveList();
     renderStats();
     renderGameSummary();
@@ -496,6 +492,8 @@ async function runAnalysis() {
     } else {
       openingStatus.textContent = "Opening: unmatched or explorer unreachable (see console) — used fallback heuristic";
     }
+
+    switchTab("moves");
   }
 
   engine.stopAndTerminate();
@@ -538,6 +536,7 @@ function resetAll() {
   engineStatus.textContent = "Engine: not loaded";
   engineStatus.className = "engine-status";
   openingStatus.textContent = "";
+  switchTab("set");
 }
 
 // ---------- Rendering: board ----------
@@ -575,11 +574,10 @@ function placeSquare(row, col, pieceChar, lastMove) {
 
   if (pieceChar) {
     const isWhite = pieceChar === pieceChar.toUpperCase();
-    const glyph = PIECE_GLYPHS[pieceChar.toLowerCase()];
-    const span = document.createElement("span");
-    span.className = `piece ${isWhite ? "white-piece" : "black-piece"}`;
-    span.textContent = glyph;
-    square.appendChild(span);
+    const type = pieceChar.toLowerCase(); // p n b r q k
+    const div = document.createElement("div");
+    div.className = `piece piece-${type} ${isWhite ? "piece-white" : "piece-black"}`;
+    square.appendChild(div);
   }
 
   if (lastMove && squareName === lastMove.toSquare && lastMove.badge) {
@@ -760,7 +758,7 @@ function renderCandidates(index) {
 }
 
 // ---------- Rendering: stats ----------
-const STAT_ORDER = ["BRILLIANT", "GOOD", "BEST", "CORRECT", "BOOK", "FORCED", "MISTAKE", "BLUNDER"];
+const STAT_ORDER = ["BRILLIANT", "GOOD", "SOLID", "CORRECT", "BOOK", "FORCED", "MISTAKE", "BLUNDER"];
 
 // Small badge icon shared by the stats table and the legend - the same
 // circular, colored symbol used on the board, just inline instead of
@@ -912,6 +910,18 @@ analyzeBtn.addEventListener("click", runAnalysis);
 cancelBtn.addEventListener("click", cancelAnalysis);
 resetBtn.addEventListener("click", resetAll);
 settingsBtn.addEventListener("click", () => { settingsPanel.hidden = !settingsPanel.hidden; });
+
+// ---------- Tabs (Set / Moves) ----------
+function switchTab(tabName) {
+  document.querySelectorAll(".tab-btn").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.tab === tabName);
+  });
+  el("tabPanelSet").classList.toggle("active", tabName === "set");
+  el("tabPanelMoves").classList.toggle("active", tabName === "moves");
+}
+document.querySelectorAll(".tab-btn").forEach(btn => {
+  btn.addEventListener("click", () => switchTab(btn.dataset.tab));
+});
 el("exportPgnBtn").addEventListener("click", exportAnnotatedPgn);
 
 el("navStart").addEventListener("click", () => goToPly(-1));
