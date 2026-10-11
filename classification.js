@@ -37,11 +37,13 @@
  *               pass over the finished game. The first Good move opens
  *               a window of that same player's own subsequent moves.
  *               If every one of them is also Good or Solid, AND the
- *               opponent's moves across that same span were never a
- *               Mistake or Blunder (otherwise it's their error being
- *               converted, not a demonstrated combo), the origin move
- *               is upgraded to Brilliant. The window length scales
- *               with game phase - see brilliantWindow().
+ *               opponent's own moves across that same span were always
+ *               Good, Solid, or Forced - a plain Correct doesn't cut
+ *               it either, let alone a Mistake or Blunder, otherwise
+ *               it's their lesser play being converted, not a
+ *               demonstrated combo - the origin move is upgraded to
+ *               Brilliant. The window length scales with game phase -
+ *               see brilliantWindow().
  *
  * This file has NO dependency on the engine or the UI: it just takes
  * already-computed MultiPV data and returns labels. That keeps it easy
@@ -249,19 +251,24 @@ const Classification = (() => {
   // player's own skill if the opponent was putting up real resistance
   // throughout its span - not simply handing over material or position
   // (e.g. dropping a queen onto a square that gets naturally recaptured
-  // move after move). If the opponent played a Mistake or Blunder
-  // anywhere in the span, that's their error being converted, not a
-  // demonstrated combo, so the chain is disqualified. Book and Forced
-  // opponent moves are exempt (no real choice either way). The origin
-  // player's own intermediate moves within the span are skipped here -
-  // those are judged by the chain-quality check in upgradeBrilliants,
+  // move after move), and not just "fine, nothing special" play either.
+  // The bar is deliberately high: the opponent's own moves must be
+  // Good or Solid (an allowlist, not a Mistake/Blunder blocklist) - a
+  // plain Correct still disqualifies the chain, since the point is to
+  // value a tight match where both sides were doing their best and one
+  // still found a combo, not to reward converting an easier game. Book
+  // and Forced opponent moves are exempt (no real choice either way).
+  // The origin player's own intermediate moves within the span are
+  // skipped here - those are judged by the chain-quality check in
+  // upgradeBrilliants,
   // not by this opponent-facing one.
   function opponentHeldUp(classifiedMoves, fromIndex, toIndex, originColor) {
     for (let j = fromIndex + 1; j <= toIndex; j++) {
       const m = classifiedMoves[j];
       if (m.color === originColor) continue;
-      if (m.label.key === "FORCED" || m.label.key === "BOOK") continue;
-      if (m.label.key === "MISTAKE" || m.label.key === "BLUNDER") return false;
+      if (m.label.key === "FORCED" || m.label.key === "BOOK") continue; // no real choice either way, exempt
+      if (m.label.key === "GOOD" || m.label.key === "SOLID") continue; // held up their end
+      return false; // Correct, Mistake, or Blunder - not good enough resistance
     }
     return true;
   }

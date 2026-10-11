@@ -23,14 +23,17 @@ const progressLabel = el("progressLabel");
 const engineStatus = el("engineStatus");
 const openingStatus = el("openingStatus");
 const boardEl = el("board");
+const evalBarWrap = el("evalBarWrap");
 const evalBarWhite = el("evalBarWhite");
 const evalBarLabel = el("evalBarLabel");
 const moveListEl = el("moveList");
 const statsBody = el("statsBody");
-const legendList = el("legendList");
 const turnIndicator = el("turnIndicator");
 const filesLabel = el("filesLabel");
 const ranksLabel = el("ranksLabel");
+const flipBoardBtn = el("flipBoardBtn");
+const playerNameTop = el("playerNameTop");
+const playerNameBottom = el("playerNameBottom");
 const candidatesList = el("candidatesList");
 const candidatesTitle = el("candidatesTitle");
 const lichessUsernameInput = el("lichessUsernameInput");
@@ -214,6 +217,7 @@ let classified = [];     // parallel array, one Classification result per ply
 let fenAtPly = [];       // fenAtPly[i] = fen AFTER ply i is played (fenAtPly[-1] = start)
 let gameHeaders = {};    // PGN header tags from the loaded game, for export
 let currentPlyView = -1; // -1 = start position
+let boardFlipped = false;
 let engine = null;
 let cancelRequested = false;
 
@@ -370,6 +374,7 @@ async function runAnalysis() {
   plies = parsed.plies;
   fenAtPly = parsed.fens;
   gameHeaders = parsed.headers;
+  updatePlayerNames();
   classified = new Array(plies.length).fill(null);
   cancelRequested = false;
 
@@ -493,7 +498,7 @@ async function runAnalysis() {
       openingStatus.textContent = "Opening: unmatched or explorer unreachable (see console) — used fallback heuristic";
     }
 
-    switchTab("moves");
+    switchTab("left", "moves");
   }
 
   engine.stopAndTerminate();
@@ -526,37 +531,46 @@ function resetAll() {
   progressRow.hidden = true;
   progressFill.style.width = "0%";
   moveListEl.innerHTML = "";
-  statsBody.innerHTML = "";
+  renderStats(); // back to all-zero counts rather than an empty table
   renderBoard(chess.fen());
   updateEvalBar(null);
   renderCandidates(-1);
+  updatePlayerNames();
   el("exportPgnBtn").disabled = true;
   el("gameSummary").hidden = true;
   el("summaryCaveat").hidden = true;
   engineStatus.textContent = "Engine: not loaded";
   engineStatus.className = "engine-status";
   openingStatus.textContent = "";
-  switchTab("set");
+  switchTab("left", "set");
+  switchTab("right", "summary");
 }
 
 // ---------- Rendering: board ----------
 function renderBoard(fen, lastMove) {
   boardEl.innerHTML = "";
   const rows = fen.split(" ")[0].split("/");
+  const squares = []; // built in normal (white-at-bottom) order first
   for (let r = 0; r < 8; r++) {
     let fileIdx = 0;
     for (const ch of rows[r]) {
       if (/\d/.test(ch)) {
         for (let k = 0; k < parseInt(ch, 10); k++) {
-          placeSquare(r, fileIdx, null, lastMove);
+          squares.push({ row: r, col: fileIdx, pieceChar: null });
           fileIdx++;
         }
       } else {
-        placeSquare(r, fileIdx, ch, lastMove);
+        squares.push({ row: r, col: fileIdx, pieceChar: ch });
         fileIdx++;
       }
     }
   }
+  // Flipping the board is just a 180-degree read of the same 64
+  // squares - reversing the whole sequence lands every square exactly
+  // where it needs to be, without any per-element flip math (so piece
+  // sprites and badge overlays never need counter-rotating).
+  if (boardFlipped) squares.reverse();
+  squares.forEach(sq => placeSquare(sq.row, sq.col, sq.pieceChar, lastMove));
 }
 
 function placeSquare(row, col, pieceChar, lastMove) {
@@ -593,21 +607,38 @@ function placeSquare(row, col, pieceChar, lastMove) {
 
 function renderCoordinates() {
   filesLabel.innerHTML = "";
-  "abcdefgh".split("").forEach(f => {
+  const files = "abcdefgh".split("");
+  if (boardFlipped) files.reverse();
+  files.forEach(f => {
     const s = document.createElement("span");
     s.textContent = f;
     filesLabel.appendChild(s);
   });
+
   ranksLabel.innerHTML = "";
-  for (let r = 1; r <= 8; r++) {
+  const ranks = [1, 2, 3, 4, 5, 6, 7, 8];
+  if (boardFlipped) ranks.reverse();
+  ranks.forEach(r => {
     const s = document.createElement("span");
     s.textContent = r;
     ranksLabel.appendChild(s);
-  }
+  });
+}
+
+// Shows each side's name above/below the board, swapping sides when
+// the board is flipped so the name always sits next to that player's
+// own pieces. Falls back to plain "White"/"Black" if the loaded PGN
+// had no header for it (or nothing's loaded yet).
+function updatePlayerNames() {
+  const white = gameHeaders.White || "White";
+  const black = gameHeaders.Black || "Black";
+  playerNameTop.textContent = boardFlipped ? white : black;
+  playerNameBottom.textContent = boardFlipped ? black : white;
 }
 
 // ---------- Rendering: eval bar ----------
 function updateEvalBar(entry) {
+  evalBarWrap.classList.toggle("flipped", boardFlipped);
   if (!entry) {
     evalBarWhite.style.height = "50%";
     evalBarLabel.textContent = "0.0";
@@ -639,6 +670,12 @@ function renderMoveListRow(i) {
       if (blackCell) fillPlyCell(blackCell, i);
     }
   }
+  // Without this, once the list grows taller than its own scroll
+  // area, newly-added rows land below the fold and analysis can look
+  // like it's stalled even though it's still running fine (visible as
+  // a stuck progress bar look, even while the Set tab's own progress
+  // bar keeps moving) - keep the latest move in view as it's added.
+  moveListEl.scrollTop = moveListEl.scrollHeight;
 }
 
 function buildMoveRow(i) {
@@ -760,9 +797,9 @@ function renderCandidates(index) {
 // ---------- Rendering: stats ----------
 const STAT_ORDER = ["BRILLIANT", "GOOD", "SOLID", "CORRECT", "BOOK", "FORCED", "MISTAKE", "BLUNDER"];
 
-// Small badge icon shared by the stats table and the legend - the same
-// circular, colored symbol used on the board, just inline instead of
-// overlaid on a square.
+// Small badge icon used in the stats table - the same circular,
+// colored symbol used on the board, just inline instead of overlaid
+// on a square.
 function makeBadgeIcon(info) {
   const badge = document.createElement("span");
   badge.className = "badge-icon";
@@ -829,17 +866,6 @@ function renderStats() {
     tr.appendChild(tdLabel);
     tr.appendChild(tdBlack);
     statsBody.appendChild(tr);
-  });
-}
-
-function renderLegend() {
-  legendList.innerHTML = "";
-  STAT_ORDER.forEach(key => {
-    const info = Classification.LABELS[key];
-    const li = document.createElement("li");
-    li.appendChild(makeBadgeIcon(info));
-    li.appendChild(document.createTextNode(info.name));
-    legendList.appendChild(li);
   });
 }
 
@@ -911,18 +937,28 @@ cancelBtn.addEventListener("click", cancelAnalysis);
 resetBtn.addEventListener("click", resetAll);
 settingsBtn.addEventListener("click", () => { settingsPanel.hidden = !settingsPanel.hidden; });
 
-// ---------- Tabs (Set / Moves) ----------
-function switchTab(tabName) {
-  document.querySelectorAll(".tab-btn").forEach(btn => {
+// ---------- Tabs (left: Set/Moves, right: Summary/Candidates) ----------
+// Scoped by data-group so switching one side's tab never touches the
+// other side's currently-active tab.
+function switchTab(group, tabName) {
+  document.querySelectorAll(`.tab-btn[data-group="${group}"]`).forEach(btn => {
     btn.classList.toggle("active", btn.dataset.tab === tabName);
   });
-  el("tabPanelSet").classList.toggle("active", tabName === "set");
-  el("tabPanelMoves").classList.toggle("active", tabName === "moves");
+  document.querySelectorAll(`.tab-panel[data-group="${group}"]`).forEach(panel => {
+    panel.classList.toggle("active", panel.dataset.tab === tabName);
+  });
 }
 document.querySelectorAll(".tab-btn").forEach(btn => {
-  btn.addEventListener("click", () => switchTab(btn.dataset.tab));
+  btn.addEventListener("click", () => switchTab(btn.dataset.group, btn.dataset.tab));
 });
 el("exportPgnBtn").addEventListener("click", exportAnnotatedPgn);
+
+flipBoardBtn.addEventListener("click", () => {
+  boardFlipped = !boardFlipped;
+  renderCoordinates();
+  updatePlayerNames();
+  goToPly(currentPlyView); // re-renders the board, eval bar and candidates in the new orientation
+});
 
 el("navStart").addEventListener("click", () => goToPly(-1));
 el("navPrev").addEventListener("click", () => goToPly(Math.max(-1, currentPlyView - 1)));
@@ -945,7 +981,8 @@ document.addEventListener("keydown", (e) => {
 
 // ---------- Init ----------
 renderCoordinates();
-renderLegend();
+renderStats(); // shows every category at 0/0 from the start, replacing the old separate legend
 renderBoard(new Chess().fen());
 updateEvalBar(null);
 renderCandidates(-1);
+updatePlayerNames();

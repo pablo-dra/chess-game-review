@@ -109,10 +109,17 @@ you have that extension installed) — then open `http://localhost:8000`.
 
 ## 2. Using it
 
-The left column has two tabs: **Set** (loading a game and running the
-analysis) and **Moves** (the move list once it's ready) — kept
-separate so the move list has its own dedicated space instead of
-sitting squeezed below everything else.
+Both side columns are tabbed, kept separate so each piece of
+information gets its own dedicated space instead of everything being
+squeezed into one long scroll:
+
+- **Left** — **Set** (loading a game and running the analysis) and
+  **Moves** (the move list once it's ready).
+- **Right** — **Summary** (accuracy, rating estimate, and the move
+  stats table — shown with every category at 0 from the moment the
+  page loads, doubling as the legend for what each badge means) and
+  **Candidates** (the alternatives the engine considered at whichever
+  move you're currently looking at).
 
 1. On the **Set** tab, get a game in, one of two ways:
    - Type a **Lichess username** and click **Load games** — this calls
@@ -124,11 +131,18 @@ sitting squeezed below everything else.
 2. Click **Analyze**. The gear icon lets you change search depth,
    MultiPV width, and the Mistake/Blunder thresholds before running.
    Once analysis finishes, the view switches to the **Moves** tab
-   automatically.
+   automatically. The move list auto-scrolls to keep the latest move
+   in view as they're added — without that, a long game can *look*
+   stalled partway through once the list grows past its own visible
+   area, even though analysis is still running fine (check the
+   progress bar on the Set tab if ever in doubt; it keeps moving
+   regardless of which tab is open).
 3. Click through the move list, or use the ◀ ▶ buttons (or your
    keyboard's left/right arrows) to step through the game; the badge
-   on the last-moved square and the stats table on the right update
-   per move. **Reset** switches back to the **Set** tab.
+   on the last-moved square, the eval bar, and the Candidates tab all
+   update per move. **⇅** flips the board (and the player-name labels
+   above/below it, pulled from the PGN's `White`/`Black` headers).
+   **Reset** switches both columns back to their first tab.
 
 Analysis runs entirely in your browser — nothing is sent anywhere
 except the opening-book lookups to Lichess's public Masters explorer
@@ -190,12 +204,14 @@ of testing against real games:
   pass over the finished game. The first **Good** move opens a window
   of that same player's own subsequent moves. If every one of them is
   also **Good or Solid**, *and* the opponent's own moves across that
-  same span were never a Mistake or Blunder (otherwise it's their
-  error being converted, not a demonstrated combo), the origin move is
-  upgraded to Brilliant — the rest of the chain keeps whatever label
-  it already had. Forced and Book moves inside the span don't count
-  toward it and don't break it either, since neither involves a real
-  choice. No material-sacrifice detection is needed for this — a
+  same span were *always* **Good, Solid, or Forced** — a plain
+  Correct disqualifies it too, not just a Mistake or Blunder, since
+  the point is to value a tight match where both sides were doing
+  their best and one still found a combo, not to reward converting an
+  easier game — the origin move is upgraded to Brilliant; the rest of
+  the chain keeps whatever label it already had. Book moves inside the
+  span are exempt from that check too (established theory, not really
+  a choice). No material-sacrifice detection is needed for this — a
   Tal-style piece left "hanging" while pushing a different plan shows
   up naturally through the same Good/Solid chain.
 

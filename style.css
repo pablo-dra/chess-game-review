@@ -406,6 +406,25 @@ body {
 .files { justify-content: space-around; width: 448px; padding: 3px 0 0; }
 .ranks { flex-direction: column-reverse; justify-content: space-around; padding: 0 3px 0 0; height: 448px; }
 
+.player-name {
+  width: 448px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 2px 2px 6px;
+}
+#playerNameBottom { padding: 6px 2px 0; }
+
+/* Flipping re-renders the 64 squares in reverse order (see goToPly's
+   call into renderBoard in app.js) rather than CSS-rotating the board,
+   so badge overlays and piece sprites never end up upside-down. The
+   eval bar is mirrored, though, since it has no such per-square
+   complication - same convention lichess uses, so the side now at the
+   bottom of the screen still reads their winning chances from the
+   bottom of the bar. */
+.eval-bar-wrap.flipped { transform: scaleY(-1); }
+.eval-bar-wrap.flipped .eval-bar-label { transform: scaleY(-1); }
+
 .board-footer {
   display: flex;
   justify-content: space-between;
@@ -416,19 +435,15 @@ body {
   color: var(--text-dim);
 }
 
-.candidates-panel {
-  width: 448px;
-  margin-top: 14px;
-}
 .candidates-list {
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 160px;
+  max-height: 480px;
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 4px;
-  background: var(--panel-bg);
+  background: var(--panel-bg-2);
 }
 .candidate-row {
   display: flex;
@@ -515,9 +530,6 @@ body {
   font-weight: 700;
   line-height: 1;
 }
-
-.legend { list-style: none; margin: 0; padding: 0; font-size: 12px; color: var(--text-dim); }
-.legend li { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
 
 .footer-note {
   text-align: center;

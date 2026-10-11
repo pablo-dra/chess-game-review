@@ -21,11 +21,11 @@
   <!-- LEFT: controls -->
   <section class="controls">
     <div class="tab-bar">
-      <button type="button" class="tab-btn active" id="tabBtnSet" data-tab="set">Set</button>
-      <button type="button" class="tab-btn" id="tabBtnMoves" data-tab="moves">Moves</button>
+      <button type="button" class="tab-btn active" id="tabBtnSet" data-group="left" data-tab="set">Set</button>
+      <button type="button" class="tab-btn" id="tabBtnMoves" data-group="left" data-tab="moves">Moves</button>
     </div>
 
-    <div id="tabPanelSet" class="tab-panel active">
+    <div id="tabPanelSet" class="tab-panel active" data-group="left" data-tab="set">
     <label for="lichessUsernameInput">Load from a Lichess username (public games)</label>
     <div class="lichess-fetch-row">
       <input type="text" id="lichessUsernameInput" placeholder="username" />
@@ -91,7 +91,7 @@
     </div>
     </div><!-- /tabPanelSet -->
 
-    <div id="tabPanelMoves" class="tab-panel">
+    <div id="tabPanelMoves" class="tab-panel" data-group="left" data-tab="moves">
       <ol id="moveList" class="move-list"></ol>
     </div>
   </section>
@@ -99,7 +99,7 @@
   <!-- CENTER: board -->
   <section class="board-area">
     <div class="board-row">
-      <div class="eval-bar-wrap">
+      <div class="eval-bar-wrap" id="evalBarWrap">
         <div class="eval-bar" id="evalBar">
           <div class="eval-bar-white" id="evalBarWhite"></div>
           <div class="eval-bar-label" id="evalBarLabel">0.0</div>
@@ -107,8 +107,10 @@
       </div>
 
       <div class="board-wrap">
+        <div class="player-name" id="playerNameTop">Black</div>
         <div class="board" id="board"></div>
         <div class="files" id="filesLabel"></div>
+        <div class="player-name" id="playerNameBottom">White</div>
       </div>
       <div class="ranks" id="ranksLabel"></div>
     </div>
@@ -116,47 +118,52 @@
     <div class="board-footer">
       <span id="turnIndicator">White to move</span>
       <span id="moveNav">
-        <button id="navStart" class="btn btn-small">⏮</button>
-        <button id="navPrev" class="btn btn-small">◀</button>
-        <button id="navNext" class="btn btn-small">▶</button>
-        <button id="navEnd" class="btn btn-small">⏭</button>
+        <button id="navStart" class="btn btn-small" title="Start">⏮</button>
+        <button id="navPrev" class="btn btn-small" title="Previous move">◀</button>
+        <button id="navNext" class="btn btn-small" title="Next move">▶</button>
+        <button id="navEnd" class="btn btn-small" title="End">⏭</button>
+        <button id="flipBoardBtn" class="btn btn-small" title="Flip board">⇅</button>
       </span>
-    </div>
-
-    <div class="candidates-panel">
-      <h2 class="section-heading" id="candidatesTitle">Candidate moves here</h2>
-      <ul id="candidatesList" class="candidates-list"></ul>
     </div>
   </section>
 
   <!-- RIGHT: stats -->
   <aside class="stats-area">
-    <div id="gameSummary" class="game-summary" hidden>
-      <div class="summary-col">
-        <div class="summary-label">White</div>
-        <div class="summary-accuracy" id="summaryAccuracyW">—</div>
-        <div class="summary-elo" id="summaryEloW">—</div>
-      </div>
-      <div class="summary-col">
-        <div class="summary-label">Black</div>
-        <div class="summary-accuracy" id="summaryAccuracyB">—</div>
-        <div class="summary-elo" id="summaryEloB">—</div>
-      </div>
+    <div class="tab-bar">
+      <button type="button" class="tab-btn active" id="tabBtnSummary" data-group="right" data-tab="summary">Summary</button>
+      <button type="button" class="tab-btn" id="tabBtnCandidates" data-group="right" data-tab="candidates">Candidates</button>
     </div>
-    <p class="summary-caveat" id="summaryCaveat" hidden>
-      Accuracy uses Lichess's published win%-based formula. The rating estimate next to it is a rough, for-fun ballpark from accuracy alone — no validated public formula for this exists anywhere (Lichess and chess.com both keep theirs undisclosed), and it ignores opponent strength entirely, so treat it as illustrative only, not a real rating.
-    </p>
 
-    <h2 class="section-heading">Move stats</h2>
-    <table class="stats-table" id="statsTable">
-      <thead>
-        <tr><th>White</th><th>Classification</th><th>Black</th></tr>
-      </thead>
-      <tbody id="statsBody"></tbody>
-    </table>
+    <div id="tabPanelSummary" class="tab-panel active" data-group="right" data-tab="summary">
+      <div id="gameSummary" class="game-summary" hidden>
+        <div class="summary-col">
+          <div class="summary-label">White</div>
+          <div class="summary-accuracy" id="summaryAccuracyW">—</div>
+          <div class="summary-elo" id="summaryEloW">—</div>
+        </div>
+        <div class="summary-col">
+          <div class="summary-label">Black</div>
+          <div class="summary-accuracy" id="summaryAccuracyB">—</div>
+          <div class="summary-elo" id="summaryEloB">—</div>
+        </div>
+      </div>
+      <p class="summary-caveat" id="summaryCaveat" hidden>
+        Accuracy uses Lichess's published win%-based formula. The rating estimate next to it is a rough, for-fun ballpark from accuracy alone — no validated public formula for this exists anywhere (Lichess and chess.com both keep theirs undisclosed), and it ignores opponent strength entirely, so treat it as illustrative only, not a real rating.
+      </p>
 
-    <h2 class="section-heading">Legend</h2>
-    <ul class="legend" id="legendList"></ul>
+      <h2 class="section-heading">Move stats</h2>
+      <table class="stats-table" id="statsTable">
+        <thead>
+          <tr><th>White</th><th>Classification</th><th>Black</th></tr>
+        </thead>
+        <tbody id="statsBody"></tbody>
+      </table>
+    </div>
+
+    <div id="tabPanelCandidates" class="tab-panel" data-group="right" data-tab="candidates">
+      <h2 class="section-heading" id="candidatesTitle">Candidate moves here</h2>
+      <ul id="candidatesList" class="candidates-list"></ul>
+    </div>
   </aside>
 
 </main>
@@ -164,8 +171,8 @@
 <footer class="footer-note">
   Runs entirely in your browser using Stockfish and chess.js. Use the ◀ ▶ buttons or your keyboard's
   left/right arrow keys to step through the game. See README.md for setup notes
-  (why this needs a local server, and where to get the engine file) and for why manual
-  drag-and-drop play wasn't included in this prototype.
+  (local testing vs. GitHub Pages, and where to get the engine file and piece sprite) and for why
+  manual drag-and-drop play wasn't included in this prototype.
 </footer>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.js"></script>
