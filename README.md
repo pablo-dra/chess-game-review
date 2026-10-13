@@ -174,23 +174,21 @@ of testing against real games:
   reports the top ~5 candidates (MultiPV) at a fixed depth (default
   18, matching what Lichess's own server analysis already uses), each
   converted to win% with the same curve Lichess uses for its Accuracy
-  stat. The **mean** of those candidates is the single reference point
-  used for everything below (deliberately one consistent statistic
-  rather than mixing median and mean, which an earlier version did):
-  - If 2 or fewer candidates sit clearly above that mean — a gap of
-    5+ win% points by default — the position is a **scarce / critical
-    moment**: e.g. candidates at win% `18, 35, 45, 60, 85` (mean
-    ≈48.6) only `60` and `85` clear the gap, so the cluster is just
-    those two. Playing one of them is **Good**, but only if it's also
-    a genuine gain (8+ win% points by default) over where this same
-    player already stood two of their own moves ago — i.e. before the
-    opponent's intervening move. That gain check is what keeps an
-    obvious, forced-looking retreat (a hanging knight with only one or
-    two safe squares) from scoring the same as a real find: moving the
-    knight back to safety doesn't improve on where White already was,
-    it just avoids losing what was already fine, so it stays
-    **Correct** instead. A scarce move that misses the scarce cluster
-    entirely is Correct too.
+  stat.
+  - If every candidate is within a hair of every other one — under 1
+    win% point between the best and the worst, by default — there's
+    nothing to distinguish between them at all (a dead-lost position
+    where everything reads ~0.1%, or a deep-endgame shuffle where
+    everything's ~3%), so the move is **Correct** outright, no further
+    analysis needed. Without this guard, a tied-at-the-bottom set could
+    spuriously read as Solid just for matching its own meaningless
+    mean.
+  - Otherwise, the **mean** of the candidates decides the rest. If 2 or
+    fewer candidates sit clearly above it — a gap of 5+ win% points by
+    default — the position is a **scarce / critical moment**: e.g.
+    candidates at win% `18, 35, 45, 60, 85` (mean ≈48.6) only `60` and
+    `85` clear the gap, so the cluster is just those two. Playing one
+    of them is **Good**.
   - If 3 or more candidates are close together — a standard,
     unremarkable position, e.g. win% `40, 43, 44, 45, 48` (mean 44,
     nothing clears the gap) — there's no standout to chase, so the
@@ -198,22 +196,42 @@ of testing against real games:
     playing 45 or 48), **Correct** for one below it (e.g. 40 or 43).
   - A move that isn't among the analyzed candidates at all is always
     **Correct** (never Good or Solid), regardless of what its own
-    searched evaluation happens to be — it wasn't one of the position's
-    standout or above-average options as far as the analysis goes.
+    searched evaluation happens to be.
+
+  An earlier version also required a Good move to be a "genuine gain"
+  (8+ win% points) over the player's own win% a couple of moves back,
+  specifically to keep an obvious, forced-looking retreat (a hanging
+  knight with only one safe square) from scoring the same as a real
+  find. Testing against real games found that check rejecting clearly-
+  deserved Good moves far more often than it ever caught a trivial
+  one — it saturates near 0%/100% win% where there's barely any room
+  left to "gain" even when the choice still matters (a move to a
+  forced mate right after another near-certain win, say), and it
+  penalizes normal mid-game fluctuation even when the played move is
+  the engine's own top choice, since the position can legitimately
+  settle a bit lower than 2 moves ago after the opponent's best
+  defense, for reasons that have nothing to do with the move being
+  judged. No clean win%-only signal was found to tell "trivial" apart
+  from "hard but numerically identical", so the gain check was dropped
+  — scarcity alone decides Good now. That's a real trade-off (some
+  protection against the trivial case is gone), open to revisiting if
+  real games start showing the opposite problem instead.
 - **Brilliant** — not a per-move check at all: a single retrospective
   pass over the finished game. The first **Good** move opens a window
   of that same player's own subsequent moves. If every one of them is
   also **Good or Solid**, *and* the opponent's own moves across that
-  same span were *always* **Good, Solid, or Forced** — a plain
-  Correct disqualifies it too, not just a Mistake or Blunder, since
-  the point is to value a tight match where both sides were doing
-  their best and one still found a combo, not to reward converting an
-  easier game — the origin move is upgraded to Brilliant; the rest of
-  the chain keeps whatever label it already had. Book moves inside the
-  span are exempt from that check too (established theory, not really
-  a choice). No material-sacrifice detection is needed for this — a
-  Tal-style piece left "hanging" while pushing a different plan shows
-  up naturally through the same Good/Solid chain.
+  same span were never a **Mistake or Blunder**, the origin move is
+  upgraded to Brilliant; the rest of the chain keeps whatever label it
+  already had. A plain **Correct** from the opponent does *not*
+  disqualify it — in a forced sequence, Correct may well have been
+  their only reasonable option, and the origin player still had to
+  find and convert it (an earlier, stricter version required Good or
+  Solid from the opponent too; testing against a real game with a
+  completely lost, no-good-options-at-all opponent position showed
+  that version wrongly refusing a Brilliant that was clearly earned).
+  No material-sacrifice detection is needed for this — a Tal-style
+  piece left "hanging" while pushing a different plan shows up
+  naturally through the same Good/Solid chain.
 
   The window length is configurable separately for the opening and
   the endgame (defaults: 2 of the player's own moves early, 4 late —
@@ -227,14 +245,14 @@ of testing against real games:
   if material hasn't dropped much, and a sharp line that sheds material
   fast counts as late-game even before move 10.
 
-All thresholds (Mistake drop, Blunder drop, Good's minimum gain, and
-the two Brilliant chain lengths) are exposed in the gear-icon settings
-panel so they're easy to retune while testing against real games —
-nothing about their defaults is meant to be final. The material/move
-breakpoints that drive the phase interpolation aren't yet exposed as
-settings (they're constants inside `brilliantWindow()` in
-`classification.js`) — worth adding to the panel too if they turn out
-to need tuning.
+All thresholds (Mistake drop, Blunder drop, the minimum spread to tell
+candidates apart at all, and the two Brilliant chain lengths) are
+exposed in the gear-icon settings panel so they're easy to retune
+while testing against real games — nothing about their defaults is
+meant to be final. The material/move breakpoints that drive the phase
+interpolation aren't yet exposed as settings (they're constants inside
+`brilliantWindow()` in `classification.js`) — worth adding to the
+panel too if they turn out to need tuning.
 
 ## 4. Exporting the analyzed game
 

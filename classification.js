@@ -5,26 +5,34 @@
  *   Book      - matches known opening theory (Lichess Masters explorer)
  *   Forced    - exactly one legal move, no real decision, not analyzed
  *   Mistake / Blunder - win% drop from the best available move
- *                (10 / 20 points by default)
+ *                (10 / 20 points by default - an absolute win%-point
+ *                drop, not a drop relative to the position's own
+ *                starting win%)
  *
  *   For every other move, the engine's top ~5 candidates (MultiPV) are
- *   converted to win% (Lichess's own centipawn curve) and their MEAN
- *   is used as the single reference point for everything below:
+ *   converted to win% (Lichess's own centipawn curve). If every
+ *   candidate is within a hair of every other one (under 1 win% point
+ *   between the best and the worst, by default), there's nothing to
+ *   distinguish between them at all - e.g. a dead-lost position where
+ *   every legal reply reads ~0.1%, or a deep-endgame shuffle where
+ *   everything is ~3% - so the move is Correct outright, no further
+ *   analysis needed. Otherwise, their MEAN is the single reference
+ *   point for everything below:
  *
  *   - If 2 or fewer candidates sit clearly above that mean (a "scarce"
  *     position - a critical moment where only a couple of moves keep
- *     things going), the played move is:
- *       Good    - it's one of those scarce standouts, AND it's a
- *                 genuine gain (8+ win% by default) over where this
- *                 same player stood two of their own moves ago (i.e.
- *                 before the opponent's intervening move). This is
- *                 what keeps an obvious, forced-looking retreat (a
- *                 hanging knight with only one safe square) from
- *                 scoring the same as a real find: moving the knight
- *                 back doesn't improve on where White already was, it
- *                 just avoids losing what was already fine.
- *       Correct - scarce, but no genuine gain (the forced-retreat case
- *                 above), or just not one of the standouts.
+ *     things going) and the played move is one of them, it's Good.
+ *     (An earlier version also required the move to be a "genuine
+ *     gain" over the player's own win% a couple of moves back, to
+ *     keep an obvious, forced-looking retreat - a hanging knight with
+ *     only one safe square - from scoring the same as a real find.
+ *     Testing against real games showed that check rejecting clearly-
+ *     deserved Good moves far more often than it ever caught a trivial
+ *     one, for a few compounding reasons: it saturates near 0%/100%
+ *     win% where there's little room left to "gain" even when the
+ *     choice still matters, and it penalizes normal mid-game
+ *     fluctuation even when the played move is the engine's own top
+ *     choice. Dropped for now - scarcity alone decides Good.)
  *   - If the position is NOT scarce (3+ candidates close together - a
  *     standard, unremarkable position), the played move is:
  *       Solid   - at or above the mean of that set: found one of the
@@ -37,11 +45,12 @@
  *               pass over the finished game. The first Good move opens
  *               a window of that same player's own subsequent moves.
  *               If every one of them is also Good or Solid, AND the
- *               opponent's own moves across that same span were always
- *               Good, Solid, or Forced - a plain Correct doesn't cut
- *               it either, let alone a Mistake or Blunder, otherwise
- *               it's their lesser play being converted, not a
- *               demonstrated combo - the origin move is upgraded to
+ *               opponent's own moves across that same span were never
+ *               a Mistake or Blunder (otherwise it's their error being
+ *               converted, not a demonstrated combo - but a plain
+ *               Correct from the opponent is fine, since in a forced
+ *               sequence "Correct" may well have been their only
+ *               reasonable option), the origin move is upgraded to
  *               Brilliant. The window length scales with game phase -
  *               see brilliantWindow().
  *
@@ -117,7 +126,7 @@ const Classification = (() => {
    *
    * @param {Object} position
    *   { multipv: [{cp|mate, moveUci}], playedMoveUci, isBook, isForced,
-   *     moverColor, playedScore?, baselineWinPercent? }
+   *     moverColor, playedScore? }
    *   multipv is already sorted best-first, from the mover's perspective.
    *   isForced: true when this was the only legal move on the board
    *   (e.g. a king move that's the only way out of check). Forced moves
@@ -129,17 +138,12 @@ const Classification = (() => {
    *   via "go searchmoves") instead of being guessed, which is the
    *   normal case whenever the played move isn't one of the top MultiPV
    *   lines. Without it, a rough guess is used as a last resort.
-   *   baselineWinPercent is this same player's own win% right after
-   *   their own previous move (i.e. before the opponent's intervening
-   *   move) - used to check whether this move is a genuine gain, not
-   *   just a return to a position that was already fine. Pass 50 (or
-   *   omit) when there's no earlier move of theirs to compare against.
-   * @param {Object} thresholds { mistake, blunder, gapPoints, goodGain }
-   * @returns {Object} { label, dropPoints, clusterSize, gain, isTopMove, matchedCandidate, bestWinPercent, playedWinPercent }
+   * @param {Object} thresholds { mistake, blunder, gapPoints, minSpread }
+   * @returns {Object} { label, dropPoints, clusterSize, isTopMove, matchedCandidate, bestWinPercent, playedWinPercent }
    */
   function classifyMove(position, thresholds) {
     const { mistake, blunder, gapPoints } = thresholds;
-    const goodGain = thresholds.goodGain ?? 8;
+    const minSpread = thresholds.minSpread ?? 1;
 
     if (position.isForced) {
       return { label: LABELS.FORCED, dropPoints: 0, clusterSize: null, isTopMove: false, matchedCandidate: null };
@@ -184,29 +188,41 @@ const Classification = (() => {
       return { label: LABELS.CORRECT, dropPoints, clusterSize: null, isTopMove, matchedCandidate, bestWinPercent, playedWinPercent };
     }
 
+    // If every candidate is within a hair of every other one (default:
+    // under 1 win% point between the best and the worst), there's no
+    // real distinction to reward either way - e.g. a dead-lost position
+    // where every legal reply reads ~0.1%, or a deep-endgame shuffle
+    // where everything is ~3%. Skip the cluster/mean logic entirely and
+    // call it Correct, rather than let a meaningless tie-break produce
+    // a Solid that doesn't actually mean "found something better".
+    const spread = bestWinPercent - winPercents[winPercents.length - 1];
+    if (spread < minSpread) {
+      return { label: LABELS.CORRECT, dropPoints, clusterSize: null, isTopMove, matchedCandidate, bestWinPercent, playedWinPercent };
+    }
+
     const clusterSize = scarceClusterSize(winPercents, gapPoints);
-    const baseline = position.baselineWinPercent ?? 50;
-    const gain = playedWinPercent - baseline;
 
     let label;
-    if (clusterSize <= 2 && gain > goodGain) {
-      // Scarce (a critical moment) AND an actual improvement over where
-      // this player already stood -> Good.
+    if (clusterSize <= 2) {
+      // Scarce: 1-2 candidates clearly separate themselves from the
+      // rest by the gap threshold, and the played move is one of them.
+      // No separate "genuine gain" requirement any more - tried that to
+      // keep an obvious, trivial-looking retreat from scoring the same
+      // as a real find, but testing against real games showed it
+      // rejecting clearly-deserved Good moves far more often than it
+      // ever caught a trivial one (it saturates near 0%/100%, and it
+      // penalizes normal mid-game fluctuation even when the played move
+      // is the engine's own top choice). Scarcity alone decides Good
+      // for now.
       label = LABELS.GOOD;
-    } else if (clusterSize <= 2) {
-      // Scarce but merely restoring/holding what was already there
-      // (e.g. saving a piece that was hanging) - nothing was
-      // "converted", so this stays Correct rather than Good.
-      label = LABELS.CORRECT;
     } else {
       // Plenty of roughly-equal options (a standard, unremarkable
       // position) - distinguish picking one of the better ones from
-      // picking one of the weaker ones, using the same mean already
-      // computed for the scarcity check above.
+      // picking one of the weaker ones, using the mean of the set.
       const m = mean(winPercents);
       label = playedWinPercent >= m ? LABELS.SOLID : LABELS.CORRECT;
     }
-    return { label, dropPoints, clusterSize, gain, isTopMove, matchedCandidate, bestWinPercent, playedWinPercent };
+    return { label, dropPoints, clusterSize, isTopMove, matchedCandidate, bestWinPercent, playedWinPercent };
   }
 
   /**
@@ -248,27 +264,22 @@ const Classification = (() => {
   }
 
   // Used by upgradeBrilliants: a chain only reflects the origin
-  // player's own skill if the opponent was putting up real resistance
-  // throughout its span - not simply handing over material or position
-  // (e.g. dropping a queen onto a square that gets naturally recaptured
-  // move after move), and not just "fine, nothing special" play either.
-  // The bar is deliberately high: the opponent's own moves must be
-  // Good or Solid (an allowlist, not a Mistake/Blunder blocklist) - a
-  // plain Correct still disqualifies the chain, since the point is to
-  // value a tight match where both sides were doing their best and one
-  // still found a combo, not to reward converting an easier game. Book
-  // and Forced opponent moves are exempt (no real choice either way).
-  // The origin player's own intermediate moves within the span are
-  // skipped here - those are judged by the chain-quality check in
-  // upgradeBrilliants,
-  // not by this opponent-facing one.
+  // player's own skill if the opponent wasn't simply handing over
+  // material or position (e.g. dropping a queen onto a square that
+  // gets naturally recaptured move after move, or blundering into the
+  // whole sequence outright) - a Mistake or Blunder from the opponent
+  // anywhere in the span disqualifies it. A plain Correct from the
+  // opponent does NOT disqualify it: in a forced sequence, "Correct"
+  // may well have been their only reasonable option, and the origin
+  // player still had to find and convert it. The origin player's own
+  // intermediate moves within the span are skipped here - those are
+  // judged by the chain-quality check in upgradeBrilliants, not by
+  // this opponent-facing one.
   function opponentHeldUp(classifiedMoves, fromIndex, toIndex, originColor) {
     for (let j = fromIndex + 1; j <= toIndex; j++) {
       const m = classifiedMoves[j];
       if (m.color === originColor) continue;
-      if (m.label.key === "FORCED" || m.label.key === "BOOK") continue; // no real choice either way, exempt
-      if (m.label.key === "GOOD" || m.label.key === "SOLID") continue; // held up their end
-      return false; // Correct, Mistake, or Blunder - not good enough resistance
+      if (m.label.key === "MISTAKE" || m.label.key === "BLUNDER") return false;
     }
     return true;
   }
