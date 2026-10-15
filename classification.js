@@ -21,21 +21,27 @@
  *
  *   - If 2 or fewer candidates sit clearly above that mean (a "scarce"
  *     position - a critical moment where only a couple of moves keep
- *     things going) and the played move is one of them, it's Good.
- *     (An earlier version also required the move to be a "genuine
- *     gain" over the player's own win% a couple of moves back, to
- *     keep an obvious, forced-looking retreat - a hanging knight with
- *     only one safe square - from scoring the same as a real find.
- *     Testing against real games showed that check rejecting clearly-
- *     deserved Good moves far more often than it ever caught a trivial
- *     one, for a few compounding reasons: it saturates near 0%/100%
- *     win% where there's little room left to "gain" even when the
- *     choice still matters, and it penalizes normal mid-game
- *     fluctuation even when the played move is the engine's own top
- *     choice. Dropped for now - scarcity alone decides Good.)
- *   - If the position is NOT scarce (3+ candidates close together - a
- *     standard, unremarkable position), the played move is:
- *       Solid   - at or above the mean of that set: found one of the
+ *     things going) by default a 8+ win% gap, AND the played move is
+ *     itself one of those standouts (not just "the position happened
+ *     to be scarce while the player picked from the ordinary group"),
+ *     the move is:
+ *       Good    - the standout AND a genuine gain over where this same
+ *                 player stood after their own previous move. The gain
+ *                 needed is relative, not a fixed point value: it's a
+ *                 percentage (10% by default) of the opponent's
+ *                 remaining win% share, i.e. `factor * (100 -
+ *                 baseline)`. At a 50/50 baseline that's a 5-point
+ *                 gain; once the position is already heavily winning
+ *                 (say the player's at 90%, the opponent only has 10%
+ *                 left to lose) it's a 1-point gain - so the bar
+ *                 doesn't become impossible to clear near the ceiling
+ *                 the way a flat point threshold does.
+ *       Correct - the standout, but without that gain (e.g. a
+ *                 forced-looking retreat that only restores parity).
+ *   - Otherwise - either the position wasn't scarce at all (3+ close
+ *     together), or it was scarce but the player picked one of the
+ *     ordinary, non-standout options - the played move is:
+ *       Solid   - at or above the mean of the set: found one of the
  *                 better options even though the difference barely
  *                 mattered.
  *       Correct - below the mean, or not among the analyzed candidates
@@ -126,7 +132,7 @@ const Classification = (() => {
    *
    * @param {Object} position
    *   { multipv: [{cp|mate, moveUci}], playedMoveUci, isBook, isForced,
-   *     moverColor, playedScore? }
+   *     moverColor, playedScore?, baselineWinPercent? }
    *   multipv is already sorted best-first, from the mover's perspective.
    *   isForced: true when this was the only legal move on the board
    *   (e.g. a king move that's the only way out of check). Forced moves
@@ -138,12 +144,18 @@ const Classification = (() => {
    *   via "go searchmoves") instead of being guessed, which is the
    *   normal case whenever the played move isn't one of the top MultiPV
    *   lines. Without it, a rough guess is used as a last resort.
-   * @param {Object} thresholds { mistake, blunder, gapPoints, minSpread }
-   * @returns {Object} { label, dropPoints, clusterSize, isTopMove, matchedCandidate, bestWinPercent, playedWinPercent }
+   *   baselineWinPercent is this same player's own win% right after
+   *   their own previous move (i.e. before the opponent's intervening
+   *   move) - used by the relative gain check below. Pass 50 (or omit)
+   *   when there's no earlier move of theirs to compare against.
+   * @param {Object} thresholds { mistake, blunder, gapPoints, minSpread, goodGainFactor }
+   * @returns {Object} { label, dropPoints, clusterSize, gain, isTopMove, matchedCandidate, bestWinPercent, playedWinPercent }
    */
   function classifyMove(position, thresholds) {
-    const { mistake, blunder, gapPoints } = thresholds;
+    const { mistake, blunder } = thresholds;
+    const gapPoints = thresholds.gapPoints ?? 8;
     const minSpread = thresholds.minSpread ?? 1;
+    const goodGainFactor = thresholds.goodGainFactor ?? 0.10;
 
     if (position.isForced) {
       return { label: LABELS.FORCED, dropPoints: 0, clusterSize: null, isTopMove: false, matchedCandidate: null };
@@ -200,29 +212,48 @@ const Classification = (() => {
       return { label: LABELS.CORRECT, dropPoints, clusterSize: null, isTopMove, matchedCandidate, bestWinPercent, playedWinPercent };
     }
 
+    const m = mean(winPercents);
+    const clearsGap = (w) => w - m > gapPoints;
     const clusterSize = scarceClusterSize(winPercents, gapPoints);
 
+    // Scarce (1-2 candidates clear the gap) is necessary but not
+    // sufficient: the played move itself has to be one of those
+    // standouts, not just "scarce happened to be true at this
+    // position while the player picked something from the pack". A
+    // position where candidate #1 clears the gap but the player chose
+    // candidate #2 (still inside the ordinary, non-scarce group) is
+    // not a scarce find - it's judged the same as a non-scarce move.
+    const playedIsScarceStandout = clusterSize <= 2 && clearsGap(playedWinPercent);
+
+    const baseline = position.baselineWinPercent ?? 50;
+    const gain = playedWinPercent - baseline;
+    // Relative gain: how much of the opponent's remaining win% share
+    // this move needs to convert to count as a genuine find, rather
+    // than a fixed point threshold. At baseline 50%, converting 10% of
+    // the remaining 50% needs a 5-point gain; at baseline 90% (the
+    // opponent only has 10% left), the same 10% factor only needs a
+    // 1-point gain - so the bar doesn't become impossible to clear
+    // once a position is already heavily winning, the way a fixed
+    // point threshold would.
+    const requiredGain = goodGainFactor * (100 - baseline);
+
     let label;
-    if (clusterSize <= 2) {
-      // Scarce: 1-2 candidates clearly separate themselves from the
-      // rest by the gap threshold, and the played move is one of them.
-      // No separate "genuine gain" requirement any more - tried that to
-      // keep an obvious, trivial-looking retreat from scoring the same
-      // as a real find, but testing against real games showed it
-      // rejecting clearly-deserved Good moves far more often than it
-      // ever caught a trivial one (it saturates near 0%/100%, and it
-      // penalizes normal mid-game fluctuation even when the played move
-      // is the engine's own top choice). Scarcity alone decides Good
-      // for now.
+    if (playedIsScarceStandout && gain > requiredGain) {
       label = LABELS.GOOD;
+    } else if (playedIsScarceStandout) {
+      // Scarce and the player found the standout, but it didn't
+      // represent a real gain over where they already stood (e.g. a
+      // forced-looking retreat that only restores parity) - stays
+      // Correct rather than Good.
+      label = LABELS.CORRECT;
     } else {
-      // Plenty of roughly-equal options (a standard, unremarkable
-      // position) - distinguish picking one of the better ones from
-      // picking one of the weaker ones, using the mean of the set.
-      const m = mean(winPercents);
+      // Either not a scarce position at all, or it was scarce but the
+      // player picked one of the ordinary (non-standout) options -
+      // distinguish picking one of the better ones from picking one of
+      // the weaker ones, using the mean of the set either way.
       label = playedWinPercent >= m ? LABELS.SOLID : LABELS.CORRECT;
     }
-    return { label, dropPoints, clusterSize, isTopMove, matchedCandidate, bestWinPercent, playedWinPercent };
+    return { label, dropPoints, clusterSize, gain, isTopMove, matchedCandidate, bestWinPercent, playedWinPercent };
   }
 
   /**

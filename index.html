@@ -80,6 +80,14 @@
         <input type="number" id="minSpreadInput" min="0" max="10" step="0.5" value="1" />
       </label>
       <label>
+        Scarce-cluster gap (win% above the mean to count as a standout)
+        <input type="number" id="gapPointsInput" min="1" max="30" step="0.5" value="8" />
+      </label>
+      <label>
+        Good move gain factor (% of the opponent's remaining win% share)
+        <input type="number" id="goodGainFactorInput" min="1" max="100" step="1" value="10" />
+      </label>
+      <label>
         Brilliant chain length — early game (your own moves, ~first 10 full moves / 80%+ material)
         <input type="number" id="brilliantEarlyInput" min="1" max="15" value="2" />
       </label>
@@ -87,7 +95,7 @@
         Brilliant chain length — endgame (your own moves, ~after move 30 / 30% or less material)
         <input type="number" id="brilliantLateInput" min="1" max="15" value="4" />
       </label>
-      <p class="settings-note">Higher depth and MultiPV give more reliable classifications but take longer per move. Good is awarded purely on scarcity now: 1-2 candidates clearly standing out above the mean, by the gap built into that calculation. The "min. spread" threshold handles the opposite extreme — when every candidate is within a hair of every other one (a dead-lost position where everything reads ~0.1%, say), there's no real difference to reward, so the move is Correct outright rather than a meaningless Solid. A Brilliant is a chain: the first Good move, followed by that many of the player's own subsequent moves all landing Good or Solid, with the chain length scaling smoothly between the two values above based on game phase (whichever of material-left or move-count says it's later). The chain is voided only if the opponent played a Mistake or Blunder anywhere in that span — a plain Correct from them doesn't disqualify it, since in a forced sequence that may have been their only reasonable option.</p>
+      <p class="settings-note">Higher depth and MultiPV give more reliable classifications but take longer per move. Good requires two things: the played move has to be one of the 1-2 candidates that clear the "scarce-cluster gap" above the mean (not just "the position happened to be scarce" — the player has to have actually picked the standout), AND it has to pass the gain factor check against the player's own win% from their previous move. That gain requirement is relative, not a flat number: it's the gain factor times however much win% the opponent still has left to lose, so it doesn't become impossible to clear once a position is already heavily winning. The "min. spread" threshold handles the opposite extreme — when every candidate is within a hair of every other one (a dead-lost position where everything reads ~0.1%, say), there's no real difference to reward, so the move is Correct outright rather than a meaningless Solid. A Brilliant is a chain: the first Good move, followed by that many of the player's own subsequent moves all landing Good or Solid, with the chain length scaling smoothly between the two values above based on game phase (whichever of material-left or move-count says it's later). The chain is voided only if the opponent played a Mistake or Blunder anywhere in that span — a plain Correct from them doesn't disqualify it, since in a forced sequence that may have been their only reasonable option.</p>
     </div>
     </div><!-- /tabPanelSet -->
 

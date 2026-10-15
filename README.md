@@ -184,38 +184,42 @@ of testing against real games:
     spuriously read as Solid just for matching its own meaningless
     mean.
   - Otherwise, the **mean** of the candidates decides the rest. If 2 or
-    fewer candidates sit clearly above it — a gap of 5+ win% points by
+    fewer candidates sit clearly above it — a gap of 8+ win% points by
     default — the position is a **scarce / critical moment**: e.g.
-    candidates at win% `18, 35, 45, 60, 85` (mean ≈48.6) only `60` and
-    `85` clear the gap, so the cluster is just those two. Playing one
-    of them is **Good**.
-  - If 3 or more candidates are close together — a standard,
-    unremarkable position, e.g. win% `40, 43, 44, 45, 48` (mean 44,
-    nothing clears the gap) — there's no standout to chase, so the
-    split is simpler: **Solid** for a move at or above that mean (e.g.
-    playing 45 or 48), **Correct** for one below it (e.g. 40 or 43).
+    candidates at win% `18, 35, 45, 60, 85` (mean ≈48.6, threshold
+    ≈56.6) only `60` and `85` clear the gap, so the cluster is just
+    those two. Critically, the *played* move has to be one of those
+    standouts, not merely "the position happened to be scarce while
+    the player picked something from the ordinary pack" — an earlier
+    version only checked the cluster's size, which let a move that
+    missed the standout entirely (e.g. candidates `25.3, 18.9, 18.8,
+    16.5, 15.9` where only `25.3` clears the gap, but the player played
+    `18.9`) get scored as if it had found the critical moment, when it
+    hadn't. If the played move IS the standout, it's:
+    - **Good** — if it's also a genuine gain over the player's own
+      win% after their previous move. That gain requirement is
+      *relative*, not a flat point value: `gain factor × (100 -
+      baseline)`, i.e. a percentage (10% by default) of however much
+      win% the opponent still has left to lose. At a 50/50 baseline
+      that's a 5-point gain; once the player's already at 90% (the
+      opponent only has 10% left) it's a 1-point gain — so the bar
+      doesn't become impossible to clear once a position is already
+      heavily winning, the way a flat point threshold does (an earlier
+      version used a flat 8-point threshold and it broke down badly
+      near 0%/100% win%, among other issues - see the git history /
+      prior discussion for the full account of why it was reworked).
+    - **Correct** — the standout, but without that gain (e.g. a
+      forced-looking retreat that only restores parity).
+  - If the played move is NOT the standout — either because the
+    position wasn't scarce at all (3+ candidates close together, e.g.
+    win% `40, 43, 44, 45, 48`, mean 44, nothing clears the gap), or it
+    was scarce but the player picked one of the ordinary options
+    instead of the standout — the split is simpler: **Solid** for a
+    move at or above the mean (e.g. playing 45 or 48 in that example),
+    **Correct** for one below it (e.g. 40 or 43).
   - A move that isn't among the analyzed candidates at all is always
     **Correct** (never Good or Solid), regardless of what its own
     searched evaluation happens to be.
-
-  An earlier version also required a Good move to be a "genuine gain"
-  (8+ win% points) over the player's own win% a couple of moves back,
-  specifically to keep an obvious, forced-looking retreat (a hanging
-  knight with only one safe square) from scoring the same as a real
-  find. Testing against real games found that check rejecting clearly-
-  deserved Good moves far more often than it ever caught a trivial
-  one — it saturates near 0%/100% win% where there's barely any room
-  left to "gain" even when the choice still matters (a move to a
-  forced mate right after another near-certain win, say), and it
-  penalizes normal mid-game fluctuation even when the played move is
-  the engine's own top choice, since the position can legitimately
-  settle a bit lower than 2 moves ago after the opponent's best
-  defense, for reasons that have nothing to do with the move being
-  judged. No clean win%-only signal was found to tell "trivial" apart
-  from "hard but numerically identical", so the gain check was dropped
-  — scarcity alone decides Good now. That's a real trade-off (some
-  protection against the trivial case is gone), open to revisiting if
-  real games start showing the opposite problem instead.
 - **Brilliant** — not a per-move check at all: a single retrospective
   pass over the finished game. The first **Good** move opens a window
   of that same player's own subsequent moves. If every one of them is
@@ -246,11 +250,12 @@ of testing against real games:
   fast counts as late-game even before move 10.
 
 All thresholds (Mistake drop, Blunder drop, the minimum spread to tell
-candidates apart at all, and the two Brilliant chain lengths) are
-exposed in the gear-icon settings panel so they're easy to retune
-while testing against real games — nothing about their defaults is
-meant to be final. The material/move breakpoints that drive the phase
-interpolation aren't yet exposed as settings (they're constants inside
+candidates apart at all, the scarce-cluster gap, the Good move gain
+factor, and the two Brilliant chain lengths) are exposed in the
+gear-icon settings panel so they're easy to retune while testing
+against real games — nothing about their defaults is meant to be
+final. The material/move breakpoints that drive the phase interpolation
+aren't yet exposed as settings (they're constants inside
 `brilliantWindow()` in `classification.js`) — worth adding to the
 panel too if they turn out to need tuning.
 

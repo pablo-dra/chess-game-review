@@ -228,6 +228,8 @@ function readSettings() {
     mistake: parseInt(el("mistakeInput").value, 10) || 10,
     blunder: parseInt(el("blunderInput").value, 10) || 20,
     minSpread: parseFloat(el("minSpreadInput").value) || 1,
+    gapPoints: parseFloat(el("gapPointsInput").value) || 8,
+    goodGainFactor: (parseFloat(el("goodGainFactorInput").value) || 10) / 100,
     brilliantEarly: parseInt(el("brilliantEarlyInput").value, 10) || 2,
     brilliantLate: parseInt(el("brilliantLateInput").value, 10) || 4,
     minBookGames: 50,
@@ -445,8 +447,18 @@ async function runAnalysis() {
       }
     }
 
+    // This player's own win% right after their previous move (2 plies
+    // back) - the baseline the relative gain check (see classifyMove)
+    // measures against. Defaults to a neutral 50 at the very start of
+    // the game or right after leaving book (book positions are
+    // ~equal by definition).
+    const prevOwn = classified[i - 2];
+    const baselineWinPercent = (prevOwn && prevOwn.playedWinPercent !== undefined)
+      ? prevOwn.playedWinPercent
+      : 50;
+
     const result = Classification.classifyMove(
-      { multipv, playedMoveUci: ply.moveUci, isBook, isForced, moverColor: ply.color, playedScore },
+      { multipv, playedMoveUci: ply.moveUci, isBook, isForced, moverColor: ply.color, playedScore, baselineWinPercent },
       settings
     );
 
@@ -458,6 +470,7 @@ async function runAnalysis() {
       label: result.label,
       dropPoints: result.dropPoints,
       clusterSize: result.clusterSize,
+      gain: result.gain,
       isTopMove: result.isTopMove,
       bestWinPercent: result.bestWinPercent,
       playedWinPercent: result.playedWinPercent,
