@@ -508,6 +508,54 @@ async function runAnalysis() {
   goToPly(plies.length - 1);
 }
 
+// Re-decides every move's label from the win% data already saved by
+// the last analysis, using whatever the threshold inputs currently
+// say - no new Stockfish queries, no new opening-explorer lookups, so
+// it's effectively instant. Lets the user retune a threshold and see
+// the effect immediately instead of re-running the whole analysis.
+function recalculateClassification() {
+  if (plies.length === 0 || classified.some(c => c === null)) {
+    alert("Run an analysis first.");
+    return;
+  }
+
+  const settings = readSettings();
+
+  for (let i = 0; i < classified.length; i++) {
+    const entry = classified[i];
+    // Book and Forced are never threshold-dependent - nothing to redo.
+    if (entry.label.key === "BOOK" || entry.label.key === "FORCED") continue;
+
+    const prevOwn = classified[i - 2];
+    const baselineWinPercent = (prevOwn && prevOwn.playedWinPercent !== undefined)
+      ? prevOwn.playedWinPercent
+      : 50;
+
+    const winPercents = entry.candidates.map(c => c.winPercent);
+    const core = Classification.classifyFromWinPercents(
+      {
+        winPercents,
+        bestWinPercent: entry.bestWinPercent,
+        playedWinPercent: entry.playedWinPercent,
+        matchedCandidate: entry.matchedCandidate,
+        baselineWinPercent,
+      },
+      settings
+    );
+
+    entry.label = core.label;
+    entry.dropPoints = core.dropPoints;
+    entry.clusterSize = core.clusterSize;
+    entry.gain = core.gain;
+  }
+
+  Classification.upgradeBrilliants(classified, { early: settings.brilliantEarly, late: settings.brilliantLate });
+  renderMoveList();
+  renderStats();
+  renderGameSummary();
+  goToPly(currentPlyView);
+}
+
 function setBusy(isBusy) {
   analyzeBtn.disabled = isBusy;
   cancelBtn.disabled = !isBusy;
@@ -954,6 +1002,7 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
   btn.addEventListener("click", () => switchTab(btn.dataset.group, btn.dataset.tab));
 });
 el("exportPgnBtn").addEventListener("click", exportAnnotatedPgn);
+el("recalculateBtn").addEventListener("click", recalculateClassification);
 
 flipBoardBtn.addEventListener("click", () => {
   boardFlipped = !boardFlipped;

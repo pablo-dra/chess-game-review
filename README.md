@@ -259,6 +259,24 @@ aren't yet exposed as settings (they're constants inside
 `brilliantWindow()` in `classification.js`) — worth adding to the
 panel too if they turn out to need tuning.
 
+## 3a. Two more details
+
+- **At most one Brilliant per chain.** If a confirmed Brilliant's own
+  chain window contains another Good move, that move stays Good — it
+  doesn't also become a second Brilliant. There's no way to ask the
+  engine "was this a genuinely new idea, or just the forced
+  continuation of the first one" (e.g. recapturing a piece that was
+  only undefended because of the chain's own opening move), so this is
+  the practical stand-in. A later Good move, once the window has run
+  its course, is free to start its own chain.
+- **Recalculate** (in the settings panel) re-applies every threshold
+  to the game using the win%/candidate data already gathered — no new
+  Stockfish queries, effectively instant. Only Depth and MultiPV need
+  a fresh Analyze, since those change what the engine actually
+  computes; everything else (Mistake/Blunder, min. spread, the
+  scarce-cluster gap, the gain factor, the Brilliant chain lengths)
+  can be retuned and reapplied on the spot.
+
 ## 4. Exporting the analyzed game
 
 The "Export annotated PGN" button (enabled once an analysis finishes)

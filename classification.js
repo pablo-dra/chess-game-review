@@ -152,10 +152,8 @@ const Classification = (() => {
    * @returns {Object} { label, dropPoints, clusterSize, gain, isTopMove, matchedCandidate, bestWinPercent, playedWinPercent }
    */
   function classifyMove(position, thresholds) {
-    const { mistake, blunder } = thresholds;
+    const { blunder } = thresholds;
     const gapPoints = thresholds.gapPoints ?? 8;
-    const minSpread = thresholds.minSpread ?? 1;
-    const goodGainFactor = thresholds.goodGainFactor ?? 0.10;
 
     if (position.isForced) {
       return { label: LABELS.FORCED, dropPoints: 0, clusterSize: null, isTopMove: false, matchedCandidate: null };
@@ -178,18 +176,53 @@ const Classification = (() => {
       // Last-resort guess: no exact eval available for the played move,
       // so treat it conservatively as clearly worse than the weakest
       // reported candidate. Prefer passing playedScore instead of
-      // relying on this branch (see app.js: evaluateMove()).
+      // relying on this branch (see app.js: evaluateMove()). In
+      // practice app.js always supplies playedScore when the move
+      // isn't matched, so this branch is a safety net, not the normal
+      // path - which is also why "Recalculate" (re-deciding labels
+      // from already-stored win% data, no new engine queries) doesn't
+      // need to reproduce this guess: every real classified entry
+      // already has a properly-sourced playedWinPercent on file.
       playedWinPercent = winPercents[winPercents.length - 1] - Math.max(gapPoints * 2, blunder);
     }
     const isTopMove = playedIndex === 0;
 
+    const core = classifyFromWinPercents(
+      { winPercents, bestWinPercent, playedWinPercent, matchedCandidate, baselineWinPercent: position.baselineWinPercent },
+      thresholds
+    );
+    return { ...core, isTopMove, matchedCandidate };
+  }
+
+  /**
+   * The threshold-dependent half of classifyMove, operating on
+   * already-computed win% data instead of raw engine multipv - this is
+   * what makes "Recalculate" (re-deciding every move's label from
+   * already-stored data when the user changes a threshold, with no new
+   * Stockfish queries) possible: app.js calls this directly with the
+   * winPercents/bestWinPercent/playedWinPercent/matchedCandidate it
+   * already saved from the original analysis. classifyMove (above) is
+   * just this function plus the multipv-to-win%-conversion step that a
+   * fresh analysis needs and a recalculation doesn't.
+   *
+   * @param {Object} data { winPercents, bestWinPercent, playedWinPercent, matchedCandidate, baselineWinPercent? }
+   * @param {Object} thresholds { mistake, blunder, gapPoints, minSpread, goodGainFactor }
+   * @returns {Object} { label, dropPoints, clusterSize, gain, bestWinPercent, playedWinPercent }
+   */
+  function classifyFromWinPercents(data, thresholds) {
+    const { mistake, blunder } = thresholds;
+    const gapPoints = thresholds.gapPoints ?? 8;
+    const minSpread = thresholds.minSpread ?? 1;
+    const goodGainFactor = thresholds.goodGainFactor ?? 0.10;
+    const { winPercents, bestWinPercent, playedWinPercent, matchedCandidate } = data;
+
     const dropPoints = bestWinPercent - playedWinPercent;
 
     if (dropPoints >= blunder) {
-      return { label: LABELS.BLUNDER, dropPoints, clusterSize: null, isTopMove, matchedCandidate, bestWinPercent, playedWinPercent };
+      return { label: LABELS.BLUNDER, dropPoints, clusterSize: null, bestWinPercent, playedWinPercent };
     }
     if (dropPoints >= mistake) {
-      return { label: LABELS.MISTAKE, dropPoints, clusterSize: null, isTopMove, matchedCandidate, bestWinPercent, playedWinPercent };
+      return { label: LABELS.MISTAKE, dropPoints, clusterSize: null, bestWinPercent, playedWinPercent };
     }
 
     // A move the engine's top-N candidates never even listed is treated
@@ -197,7 +230,7 @@ const Classification = (() => {
     // own searched eval happens to land - it wasn't one of the position's
     // standout or above-average options as far as the analysis goes.
     if (!matchedCandidate) {
-      return { label: LABELS.CORRECT, dropPoints, clusterSize: null, isTopMove, matchedCandidate, bestWinPercent, playedWinPercent };
+      return { label: LABELS.CORRECT, dropPoints, clusterSize: null, bestWinPercent, playedWinPercent };
     }
 
     // If every candidate is within a hair of every other one (default:
@@ -209,7 +242,7 @@ const Classification = (() => {
     // a Solid that doesn't actually mean "found something better".
     const spread = bestWinPercent - winPercents[winPercents.length - 1];
     if (spread < minSpread) {
-      return { label: LABELS.CORRECT, dropPoints, clusterSize: null, isTopMove, matchedCandidate, bestWinPercent, playedWinPercent };
+      return { label: LABELS.CORRECT, dropPoints, clusterSize: null, bestWinPercent, playedWinPercent };
     }
 
     const m = mean(winPercents);
@@ -225,7 +258,7 @@ const Classification = (() => {
     // not a scarce find - it's judged the same as a non-scarce move.
     const playedIsScarceStandout = clusterSize <= 2 && clearsGap(playedWinPercent);
 
-    const baseline = position.baselineWinPercent ?? 50;
+    const baseline = data.baselineWinPercent ?? 50;
     const gain = playedWinPercent - baseline;
     // Relative gain: how much of the opponent's remaining win% share
     // this move needs to convert to count as a genuine find, rather
@@ -253,7 +286,7 @@ const Classification = (() => {
       // the weaker ones, using the mean of the set either way.
       label = playedWinPercent >= m ? LABELS.SOLID : LABELS.CORRECT;
     }
-    return { label, dropPoints, clusterSize, gain, isTopMove, matchedCandidate, bestWinPercent, playedWinPercent };
+    return { label, dropPoints, clusterSize, gain, bestWinPercent, playedWinPercent };
   }
 
   /**
@@ -334,9 +367,22 @@ const Classification = (() => {
    * @param {Object} windowSettings { early, late } - see brilliantWindow()
    */
   function upgradeBrilliants(classifiedMoves, windowSettings = { early: 2, late: 4 }) {
+    // Tracks, per color, the furthest index already inside a confirmed
+    // Brilliant's own chain window - used below so a Good move that
+    // falls inside an already-confirmed combo can't also start a
+    // second, separate Brilliant of its own. There's no way to ask the
+    // engine "was this genuinely a new idea, or just the forced
+    // continuation of the sacrifice that started the chain" (e.g.
+    // recapturing a piece that was only undefended because of the
+    // chain's own first move), so this is the practical stand-in: at
+    // most one Brilliant credited per chain. A later Good move, once
+    // the window has run its course, is still free to start its own.
+    const consumedUntil = {};
+
     for (let i = 0; i < classifiedMoves.length; i++) {
       const origin = classifiedMoves[i];
       if (origin.label.key !== "GOOD") continue;
+      if (consumedUntil[origin.color] !== undefined && i <= consumedUntil[origin.color]) continue;
 
       const window = brilliantWindow(origin.materialRatio ?? 1, origin.moveNumber, windowSettings.early, windowSettings.late);
       const sameColorFollowing = [];
@@ -356,6 +402,7 @@ const Classification = (() => {
 
       if (chainHeld && opponentHeldUp(classifiedMoves, i, lastFollowingIndex, origin.color)) {
         origin.label = LABELS.BRILLIANT;
+        consumedUntil[origin.color] = lastFollowingIndex;
       }
     }
     return classifiedMoves;
@@ -409,7 +456,7 @@ const Classification = (() => {
     return RATING_ANCHORS[RATING_ANCHORS.length - 1][1];
   }
 
-  return { LABELS, winPercentFromScore, winPercentFromCp, mean, scarceClusterSize, classifyMove, brilliantWindow, upgradeBrilliants, moveAccuracy, gameAccuracy, estimateRatingFromAccuracy };
+  return { LABELS, winPercentFromScore, winPercentFromCp, mean, scarceClusterSize, classifyMove, classifyFromWinPercents, brilliantWindow, upgradeBrilliants, moveAccuracy, gameAccuracy, estimateRatingFromAccuracy };
 })();
 
 // Allow this file to be required from Node for testing, while staying a
